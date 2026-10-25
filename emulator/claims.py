@@ -125,8 +125,10 @@ record('init while printing: status, init reply, status', '06 0E 0E', seq(a, b, 
 
 # 15 break while busy
 p, L = fresh(); load(L); L.packet(0x04); L.packet(0x02, bytes([1, 0x13, 0xE4, 0x40])); p.run_ms(300)
-a = L.packet(0x08); p.run_ms(50); b = L.packet(0x0F); c = L.packet(0x04, IMG[0]); d = L.packet(0x01); e = L.packet(0x04, IMG[0])
-record('break while printing: break, status 50ms, data, init, data', '02 06 14 04 00', seq(a, b, c, d, e))
+a = L.packet(0x08); p.run_ms(50); b = L.packet(0x0F); b2 = L.packet(0x04, IMG[0])
+while L.packet(0x0F)[-1] & 2: p.run_ms(5)
+c = L.packet(0x04, IMG[0]); d = L.packet(0x01); e = L.packet(0x04, IMG[0])
+record('break while printing: break, status, data (busy), then idle: data, init, data', '02 06 04 14 04 00', seq(a, b, b2, c, d, e), '(stops at the end of the band)')
 
 # 16 ten data packets
 p, L = fresh(); L.packet(0x01)

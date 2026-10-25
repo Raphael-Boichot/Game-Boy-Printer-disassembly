@@ -1,0 +1,6 @@
+temp ADC 40 black 1440 bursts (median 4.00 ms apart, 9.9 s in all): strobe first 2.99, 10% 1.71, 50% 1.55, 90% 1.60, last 1.46 ms
+temp ADC 40 dark  1440 bursts (median 4.00 ms apart, 9.9 s in all): strobe first 2.37, 10% 1.33, 50% 1.20, 90% 1.25, last 1.13 ms
+temp ADC 40 light 1440 bursts (median 4.00 ms apart, 9.9 s in all): strobe first 1.65, 10% 0.95, 50% 0.86, 90% 0.89, last 0.81 ms
+temp ADC 80 black 1440 bursts (median 4.00 ms apart, 9.9 s in all): strobe first 3.33, 10% 2.00, 50% 1.81, 90% 1.87, last 1.70 ms
+temp ADC 80 dark  1440 bursts (median 4.00 ms apart, 9.9 s in all): strobe first 2.58, 10% 1.52, 50% 1.38, 90% 1.42, last 1.30 ms
+temp ADC 80 light 1440 bursts (median 4.00 ms apart, 9.9 s in all): strobe first 1.85, 10% 1.14, 50% 1.03, 90% 1.07, last 0.97 ms

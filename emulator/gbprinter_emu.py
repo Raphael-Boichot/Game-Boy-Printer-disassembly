@@ -52,7 +52,7 @@ class Printer:
         self.temp_adc, self.batt_adc = temp_adc, batt_adc
         self.button = button              # True = front button held (P2.0 low)
         self.sensor_p51 = 1               # value read on P5.1 (INT4 pin; mechanism sensor, meaning unknown)
-        self.enc_period_ms = 9.0          # paper-motor encoder pulse period while the motor runs (INT3)
+        self.enc_period_ms = 4.0          # encoder pulse period while the motor runs (INT3); 4 ms = one strobe burst, measured on a real printer
         self.enc_next = None
         self.enc_pulses = 0
         self.motor_log = []               # (cycle, on/off)

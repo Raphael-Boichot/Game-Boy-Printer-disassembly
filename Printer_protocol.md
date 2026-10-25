@@ -244,6 +244,22 @@ When the job starts (871D), the firmware reads the head temperature on ADC chann
 
 A temperature reading outside 0x35–0xD7 aborts with "other error" instead. Hotter heads get shorter pulses; the exposure byte only shifts that curve.
 
+How the head is driven (from the code, reproduced in the emulator, timing checked against the owner's scope on a real printer):
+
+- Each encoder pulse (INT3) starts one strobe **burst**: 33 ticks of timer TC1, each `TREG1A` µs long (about 95–103 µs at exposure 0x40). On every tick the TC1 handler writes the next pair of bytes from two RAM tables (0x0360/0x0383 or 0x03A6/0x03C9, used alternately) to ports P0 and P1. The 16 port lines stay on for as many ticks as the dot's grey level needs.
+- A 640-byte band (16 pixel rows) takes **160 bursts**, 10 per pixel row. Bursts are 4.00 ms apart while a band prints, and a full 9-band picture takes about 9.9 s.
+- On-time per burst at exposure 0x40, middle of a full picture (emulator, head-temperature reading ≤ 0x60):
+
+  | Level | Emulator | Real printer (owner's scope) |
+  |---|---|---|
+  | Black | 1.55 ms | 1.56 ms |
+  | Dark grey | 1.20 ms | 1.20 ms |
+  | Light grey | 0.86–0.95 ms | 0.96 ms |
+
+  With a reading of 0x80 the emulator gives 1.81 / 1.38 / 1.03 ms.
+- **Heat compensation [new]:** the on-time is not constant. The first burst of a job is about twice as long (2.99 ms for black). The on-time then steps down every 16 bursts as the head warms (1.85, 1.84, 1.80, 1.76 … ms), rises slightly towards the end, and the last line is the shortest (1.46 ms for black). The step comes from the table read at AB45, indexed by the line counter 0x72.
+- White dots get only very short pulses (0.02–0.15 ms).
+
 ---
 
 ## 9. Errors and timeouts
@@ -358,7 +374,7 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 | Longest gap inside a packet that is still accepted | 3.92 ms + 1.2 ms byte time = 5.12 ms |
 | Silence after the empty data packet that wipes the job | 125 ms |
 | Init while printing: status, Init reply, status | 06 0E 0E (Init ignored, 0x08 set) |
-| Break while printing: Break reply, status 50 ms later, data, Init, data | 02 06 14 04 00; busy clears 94 ms after Break |
+| Break while printing: Break reply, status 50 ms later, data (still busy), then once idle: data, Init, data | 02 06 04 14 04 00. Break takes effect at the next paper-feed phase: 94 ms when sent during a margin feed, up to about 700 ms in the middle of a band, which is finished first |
 | 10 data packets | 00 then 08 × 9; 0x1680 bytes stored |
 | Unknown command 0x03 with payload | 81 00 |
 | Print with 0 sheets and margin 3 | busy (paper feed only) |
@@ -368,6 +384,7 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 | Front button held until the homing ends | self-test band printed (status 02 then 00); released earlier: no self-test |
 | Copies | 2 sheets take exactly twice the motor pulses of 1 |
 | Margins | each margin unit (either nibble) = one cam revolution of paper feed |
+| Strobe timing, exposure 0x40 | 160 bursts per band, 4.00 ms apart; on-time black 1.55, dark 1.20, light 0.86–0.95 ms in mid-picture (real printer: 1.56 / 1.20 / 0.96 ms); first line about 2× longer (section 8) |
 
 The power-on sequence in the emulator:
 1. RAM and SRAM test.

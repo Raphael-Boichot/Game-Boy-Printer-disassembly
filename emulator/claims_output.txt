@@ -13,7 +13,7 @@ next packet after a >5.12 ms gap                           expected 81 00       
 longest gap inside a packet that is still accepted         expected 3.91-3.93 ms   observed 3.91-3.93 ms   MATCH (+1.2 ms byte time = 5.12 ms)
 silence after end-of-data that wipes the job               expected 125-126 ms     observed 125-126 ms     MATCH (12-13 ticks of 10.24 ms)
 init while printing: status, init reply, status            expected 06 0E 0E       observed 06 0E 0E       MATCH (init ignored, 0x08 set)
-break while printing: break, status 50ms, data, init, data expected 02 06 14 04 00 observed 02 06 14 04 00 MATCH 
+break while printing: break, status, data (busy), then idle: data, init, data expected 02 06 04 14 04 00 observed 02 06 04 14 04 00 MATCH (stops at the end of the band)
 10 data packets: replies                                   expected 00 08 08 08 08 08 08 08 08 08 observed 00 08 08 08 08 08 08 08 08 08 MATCH 
   bytes stored after 10 packets (0x85)                     expected 1680           observed 1680           MATCH 
 unknown command 0x03 with payload                          expected 81 00          observed 81 00          MATCH 
