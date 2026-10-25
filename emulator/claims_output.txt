@@ -1,0 +1,25 @@
+job: init,data,data,empty,print,status,status              expected 00 00 08 08 08 04 06 observed 00 00 08 08 08 04 06 MATCH 
+bad-checksum status packet, then two good ones             expected 00 01 00       observed 00 01 00       MATCH (bit 0x01 one packet late)
+print without end-of-data packet: reply, status 200ms later expected 18 00          observed 18 00          MATCH (packet error, no print; idle reset wiped it)
+print with only 3 argument bytes: reply, status 200ms later expected 18 00          observed 18 00          MATCH (packet error, no print)
+second empty data packet (after a status poll)             expected 14             observed 14             MATCH (packet error + full)
+data with compression flag 2                               expected 10             observed 10             MATCH 
+1024-byte data: uncompressed / compressed (+status after)  expected 10 10 / 00 00  observed 10 10 / 00 00  MATCH 
+two status polls after 2 data packets                      expected 00 00          observed 00 00          MATCH (0x0F clears 0x08 before replying)
+junk byte while idle wipes data (next data reply)          expected 00 vs 08       observed 00 vs 08       MATCH (control: no junk)
+bytes after a junk first byte (no gap)                     expected FF FF FF FF FF FF FF FF FF FF observed FF FF FF FF FF FF FF FF FF FF MATCH 
+next packet after a >5.12 ms gap                           expected 81 00          observed 81 00          MATCH 
+0x88 then bad second byte: replies to bytes 2-4            expected 00 FF FF       observed 00 FF FF       MATCH 
+longest gap inside a packet that is still accepted         expected 3.91-3.93 ms   observed 3.91-3.93 ms   MATCH (+1.2 ms byte time = 5.12 ms)
+silence after end-of-data that wipes the job               expected 125-126 ms     observed 125-126 ms     MATCH (12-13 ticks of 10.24 ms)
+init while printing: status, init reply, status            expected 06 0E 0E       observed 06 0E 0E       MATCH (init ignored, 0x08 set)
+break while printing: break, status 50ms, data, init, data expected 02 06 14 04 00 observed 02 06 14 04 00 MATCH 
+10 data packets: replies                                   expected 00 08 08 08 08 08 08 08 08 08 observed 00 08 08 08 08 08 08 08 08 08 MATCH 
+  bytes stored after 10 packets (0x85)                     expected 1680           observed 1680           MATCH 
+unknown command 0x03 with payload                          expected 81 00          observed 81 00          MATCH 
+print with 0 sheets, margin 3: status after 100ms          expected 06             observed 06             MATCH (feed runs, busy)
+battery ADC 0x70 at power-on: two status replies           expected FF FF          observed FF FF          MATCH (lockout never lifted)
+head temp ADC 0x20 at power-on: status                     expected FF             observed FF             MATCH (lockout never lifted)
+encoder stops mid-print: status, init, status              expected 28 28 28       observed 28 28 28       MATCH 
+
+23 checks, 23 match, 0 differ

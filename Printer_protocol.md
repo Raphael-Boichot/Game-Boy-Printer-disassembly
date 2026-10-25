@@ -1,8 +1,8 @@
 # Game Boy Printer firmware: protocol reference
 
-*Reverse-engineered from the printer's mask ROM (Toshiba TMP87C840, 32 KB, `TMP87C840_Toshiba_printer_ROM.bin`, md5 `aa393ec87ccb4220200255ab5adf8ac9`). 2026-10-25. AI work from static reading of the code, waiting for human validation: nothing here has been run on a real printer or in an emulator of the TMP87C840.*
+*Reverse-engineered from the printer's mask ROM (Toshiba TMP87C840, 32 KB, `TMP87C840_Toshiba_printer_ROM.bin`, md5 `aa393ec87ccb4220200255ab5adf8ac9`). 2026-10-25. AI work waiting for human validation: written from static reading of the code, then checked by running this ROM in a TLCS-870 emulator (`emulator/`, section 14); nothing has been tested on a real printer yet.*
 
-Evidence tags as in the [Game Boy Camera disassembly](https://github.com/Raphael-Boichot/Game-Boy-Camera-disassembly): **C** = code-traced (read in straight-line code), **I** = inferred, **?** = inconclusive. Section 12 gives the tag of each group of findings.
+Evidence tags as in the [Game Boy Camera disassembly](https://github.com/Raphael-Boichot/Game-Boy-Camera-disassembly): **C** = code-traced (read in straight-line code) or reproduced by running the firmware in the emulator, **I** = inferred, **?** = inconclusive. Section 12 gives the tag of each group of findings; section 14 lists what the emulator reproduced.
 
 This document derives the Game Boy Printer protocol from the printer's own firmware. It confirms the documented protocol and adds the edge cases an accurate emulator (for example a BGB print interceptor) needs. All addresses are CPU addresses in the ROM (0x8000–0xFFFF) unless they are below 0x1000, which are RAM or registers.
 
@@ -27,7 +27,8 @@ Behaviours not described in the usual community documentation are marked **[new]
 | Print preconditions **[new]** | Print needs an empty data packet first and at least 4 argument bytes; otherwise packet error and nothing prints | B74F |
 | Palette 0x00 **[new]** | means "no remapping", identical to 0xE4 | 8EC8 |
 | Inter-byte timeout **[new]** | hardware timer TC4 restarted on every byte; if it expires mid-packet, the packet is aborted and its data rolled back | vector FFEA → B99E |
-| Idle reset **[new]** | 13 main-loop ticks with no byte while not printing clear memory and status, as an Init would | 82DC |
+| Idle reset **[new]** | 12–13 main-loop ticks (≈125–133 ms at 8 MHz) with no byte while not printing clear memory and status, as an Init would | 82DC |
+| Inter-byte limit **[new]** | 20 × 2048 / fc = 5.12 ms (8 MHz crystal) | TC4 |
 | Power-on lockout **[new]** | until the mechanism has finished its start-up sequence, every packet is answered 0xFF | B399 |
 
 ---
@@ -96,8 +97,8 @@ The printer is the clocked side (the Game Boy drives the clock), and its serial 
   - sets `DA.7`, so a data packet in progress is rolled back;
   - clears `D9.7` ("packet in progress").
 
-  The absolute time depends on TC4's clock source and the crystal, which the ROM doesn't reveal.
-- **Activity counter:** every byte reloads the counter at 0x041C with 0xF3. The main loop increments it once per tick while the printer is **not** busy; when it wraps to 0 (13 ticks of silence) the receive state is reset (section 9).
+  With TC4CR = 0xD0 (clock fc/2¹¹) and the 8 MHz crystal this is 20 × 256 µs = **5.12 ms**; the emulator accepts a 5.1 ms gap and aborts above it.
+- **Activity counter:** every byte reloads the counter at 0x041C with 0xF3. The main loop increments it once per tick while the printer is **not** busy; when it wraps to 0 (13 ticks of silence; one tick = TREG2 10 × fc/2¹³ = 10.24 ms, so ≈125–133 ms) the receive state is reset (section 9). Every byte counts as activity, so a Game Boy that keeps polling status never triggers it.
 
 ---
 
@@ -164,7 +165,7 @@ The status byte is the internal register 0x7C sent without reversal, so its bits
 | 0x10 | 7C.3 | packet error | current packet broke a rule (copied from `DA.0` just before the reply) | next non-status packet |
 | 0x20 | 7C.2 | paper jam | mechanism timeout during printing/feeding (8368, 8553) | never: sticky until power-off |
 | 0x40 | 7C.1 | other error | SRAM test failure at boot; head temperature ADC outside 0x35–0xD7 | never: sticky |
-| 0x80 | 7C.0 | low battery | battery ADC ≤ 0x7E (boot and periodic checks) | never: sticky |
+| 0x80 | 7C.0 | low battery | battery ADC ≤ 0x7E during operation (a low battery at power-on instead leaves the printer locked out, answering 0xFF: section 9) | never: sticky |
 
 Masks applied while building the reply (B62F–B646):
 
@@ -174,7 +175,7 @@ Masks applied while building the reply (B62F–B646):
 
 A jam abort (paper not detected in time) sets 0x20 and 0x08, clears 0x04 and 0x02, and returns the mechanism state machine to idle.
 
-### Typical sequence predicted from the code
+### Typical sequence (observed by running the firmware)
 
 | Packet | Reply status | Why |
 |---|---|---|
@@ -182,7 +183,8 @@ A jam abort (paper not detected in time) sets 0x20 and 0x08, clears 0x04 and 0x0
 | Data #1 | 0x00 | the main loop commits the data after the reply |
 | Data #2…#n | 0x08 | earlier data now unprocessed |
 | Empty data | 0x08 | 0x04 masked in this reply |
-| Print | 0x0C | full + unprocessed; printing starts after the reply |
+| Print | 0x08 | 0x04 is still masked (flag `71.1` is cleared only by a status poll); printing starts after the reply |
+| Status, < 26 ms after Print | 0x04 | busy is set 26 ms after the Print command |
 | Status (printing) | 0x06 | busy + full |
 | Status (done) | 0x04 | busy cleared; full stays until init or idle reset |
 
@@ -270,13 +272,13 @@ This is effectively an Init. So a sender must not pause too long between the las
 
 **Paper jam.** During printing or feeding, a timer (0xF3/0xF4) counts down while waiting for the mechanism; on expiry the motor stops, the jam abort described in section 6 happens, and the state machine returns to 0.
 
-**Head temperature / battery.** Checked at boot (battery), before each job (both) and periodically (A409). Out-of-range temperature → 0x40 (sticky). Low battery → 0x80 (sticky; may also abort printing via state 0x18).
+**Head temperature / battery.** Checked at boot (battery), before each job (both) and periodically (A409). Out-of-range temperature → 0x40 (sticky). Low battery during operation → 0x80 (sticky) and the print is aborted: the emulator shows 0x06 → 0x86 → 0x84. **At power-on [new]**, a low battery or an out-of-range head temperature stops the start-up homing from running, so the power-on lockout is never lifted: the printer then answers **0xFF** to every packet and never reports 0x80 or 0x40 (a paper-jam flag is the only error that bypasses the lockout, B396).
 
 ---
 
 ## 10. Built-in self-test
 
-- **Trigger:** at power-on the boot code (809C) reads P2.0 twice; if it is low both times (front button held), it sets 0xF5 = 1 and calls DDAD.
+- **Trigger:** at power-on the boot code (809C) reads P2.0 twice; if it is low both times (front button held), it sets 0xF5 = 1 and calls DDAD. The start-up homing (state 0x11, B05F) clears 0xF5 at any encoder pulse where the button is released, so the button must be held **until the motor stops** (about 1.2 s after power-on in the emulator); releasing it earlier cancels the test.
 - **Image:** DDAD copies the **640-byte image at 0xDDEE–0xE06D** (standard Game Boy 2bpp tiles, 20 × 2 tiles = 160 × 16 px) into SRAM, as if one data packet had been received (0x85 = 0x280). The test print uses an after-margin of 3 (AFB7, state 0x15).
 - **Content:** a speckled border, a Mario head, a "Hello!" banner and a Game Boy (`printer_test_image.png`).
 - **Memory test:** just before this, routine DD85 writes an incrementing pattern over all 0x1680 SRAM bytes and reads it back. Any mismatch sets "other error" (0x40).
@@ -313,29 +315,66 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 
 ## 12. Confidence and open questions
 
-**C** (code-traced, read directly from straight-line code):
+**C** (code-traced, read directly from straight-line code, and reproduced in the emulator where section 14 says so):
 
 - packet format, sync bytes, checksum, `0x81` + status reply;
 - command dispatch and acceptance rules;
 - status bit mapping;
 - RLE format, 640-byte slots, 9-slot limit;
 - palette remap and palette-0 special case;
-- self-test image and trigger.
+- self-test image and trigger;
+- reproduced in the emulator: the status sequence (section 6), the one-packet checksum lag, Init-on-garbage while idle, 0xFF sync-loss mode, Init while busy setting 0x08, Break, the 9-packet limit, the idle reset and inter-byte timeouts, copies, the power-on lockout and the self-test.
 
-**I** (depends on flags whose other writers were not all traced; to check on real hardware or with BGB's printer emulation):
+**I** (to check on real hardware):
 
-- the reply masks and predicted status sequence (section 6);
-- the one-packet checksum lag;
-- Init-on-garbage while idle;
-- Init while busy setting 0x08;
 - the low-battery reporting delay (`D9.1`);
-- the copy-count loop.
+- everything that depends on the paper mechanism: the emulator's encoder rate and cam-sensor period are guesses (`emulator/README.md`), so print durations and the length of a margin unit are not known.
 
 **?** (not resolved):
 
-- Absolute timings: the TC2 tick period (idle reset) and the TC4 inter-byte timeout. These need the crystal frequency and the timer clock-source selection.
+- The physical rate of the paper encoder (INT3) and the length of one revolution of the cam sensor (P5.1 / INT4). Margins are counted in cam revolutions.
 - The mechanism / head state machine: a 30-state table at 0xAB65 (state variable 0x73). States 0x11 = print, 0x12 = print body, 0x14 = top margin, 0x15 = bottom margin / self-test feed, 0x16 = feed only, 0x17 = button feed, 0x18 = low-battery stop.
-- Which physical sensors INT3/INT4 are, and the exact SRAM address mapping in A564 (the order bytes are laid out for printing).
+- INT3 is the paper-motor encoder and P5.1 / INT4 a once-per-revolution cam or home sensor (from the code and from what makes the emulator print); P5.2 low runs the motor. Which physical parts they are, and the SRAM address mapping in A564 (the order bytes are laid out for printing), are not known.
+
+---
+
+## 14. Verification by running the firmware
+
+`emulator/gbprinter_emu.py` runs this ROM on an emulated TMP87C840 (8 MHz) and drives the link like a Game Boy (`emulator/README.md` lists what is modelled and what is guessed). `emulator/claims.py` replays the cases below; all 23 checks give the result shown. Statuses are the bytes the Game Boy reads after `0x81`.
+
+| Case | Observed |
+|---|---|
+| Init, data, data, empty data, Print, status after 5 ms, status after 100 ms | 00 00 08 08 08 04 06 |
+| Busy after Print | set 26 ms after the command, cleared at the end of the job; afterwards 0x04 stays |
+| Status packet with a bad checksum, then two good ones | 00 01 00 (bit 0x01 one packet late) |
+| Print without the empty data packet / with 3 argument bytes | 18 (packet error), nothing printed |
+| Second empty data packet | 14 (packet error + full) |
+| Data with compression flag 2 | 10 |
+| 1,024-byte data, uncompressed / compressed, then status | 10 10 / 00 00 |
+| Two status polls after data | 00 00 (the poll clears 0x08) |
+| One junk byte while idle, then data | 00 (the data had been wiped by an Init); without the junk byte: 08 |
+| Bytes after a junk first byte, no gap | all FF; after a gap > 5.12 ms the next packet is answered normally |
+| 0x88 then a bad second byte | 00 FF FF |
+| Longest gap inside a packet that is still accepted | 3.92 ms + 1.2 ms byte time = 5.12 ms |
+| Silence after the empty data packet that wipes the job | 125 ms |
+| Init while printing: status, Init reply, status | 06 0E 0E (Init ignored, 0x08 set) |
+| Break while printing: Break reply, status 50 ms later, data, Init, data | 02 06 14 04 00; busy clears 94 ms after Break |
+| 10 data packets | 00 then 08 × 9; 0x1680 bytes stored |
+| Unknown command 0x03 with payload | 81 00 |
+| Print with 0 sheets and margin 3 | busy (paper feed only) |
+| Battery or head temperature out of range at power-on | FF to every packet (power-on lockout never lifted) |
+| Battery dropping during a print | 06 → 86 → 84 (print aborted) |
+| Encoder stops during a print: status, Init, status | 28 28 28 (jam + unprocessed, sticky) |
+| Front button held until the homing ends | self-test band printed (status 02 then 00); released earlier: no self-test |
+| Copies | 2 sheets take exactly twice the motor pulses of 1 |
+| Margins | each margin unit (either nibble) = one cam revolution of paper feed |
+
+The power-on sequence in the emulator:
+1. RAM and SRAM test.
+2. Homing at about 0.5 s: the motor runs until the cam sensor has been seen twice, about 0.7 s.
+3. Idle at about 1.2 s.
+
+Packets sent before step 3 are answered 0xFF.
 
 ---
 
@@ -345,5 +384,6 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 - `tools/trace.py` (`python3 tools/trace.py ROM.bin OUT.asm ABA1` regenerates the listing exactly): recursive tracer from the 16 interrupt vectors. It follows calls, branches and the 33 `jp (PC+A)` jump tables (one 30-entry state table at 0xAB65, and 32 tables at 0xBED7–0xCA58 in the head-strobe pattern code). About 16 KB of the 24.7 KB used ROM is reached as code; the rest is lookup tables and the test image.
 - `TMP87C840_printer_rom.asm`: the full annotated-label disassembly (vectors named `V_FFxx`, subroutines `Sxxxx`, branch targets `Lxxxx`, jump-table targets `Jxxxx`; data as `db`/`dw`).
 - `printer_test_image.png`: the self-test band rendered 4×.
+- `emulator/`: the firmware emulator and the protocol checks of section 14.
 
 Key routines for anyone continuing: B373 receiver · B9B4 byte-wait yield · B99E inter-byte timeout · 80D5 main loop · 8564 command dispatch · 85AB print-argument parser · A29D–A406 data decoder · A4C0 RLE · A48F/A4A4 SRAM read/write · A409 temperature/battery check · DD85 SRAM test · DDAD self-test loader · 0xAB62 mechanism state machine.

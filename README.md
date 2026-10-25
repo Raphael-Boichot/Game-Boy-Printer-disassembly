@@ -16,6 +16,7 @@ Holding the front button while switching on (port P2.0 read low twice at boot) m
 | [`TMP87C840_printer_rom.asm`](TMP87C840_printer_rom.asm) | Full disassembly listing of the 32 KB ROM (TLCS-870 code traced from the interrupt vectors; data as `db`/`dw`) |
 | [`tools/t870.py`](tools/t870.py) | TLCS-870 disassembler (written from MAME's `tlcs870d.cpp` opcode map) |
 | [`tools/trace.py`](tools/trace.py) | Recursive tracer: `python3 tools/trace.py TMP87C840_Toshiba_printer_ROM.bin TMP87C840_printer_rom.asm ABA1` regenerates the listing |
+| [`emulator/`](emulator/) | Emulator that runs this ROM on an emulated TMP87C840 and talks to it like a Game Boy; `claims.py` checks the protocol reference against the firmware (23 checks, all matching) |
 | [`printer_test_image.png`](printer_test_image.png) | The built-in self-test image (ROM 0xDDEE-0xE06D, 160 x 16 px), drawn 4x |
 
-All of this is AI work from static reading of the code, waiting for human validation.
+All of this is AI work, from reading the code and running it in the emulator, waiting for validation on real hardware.
