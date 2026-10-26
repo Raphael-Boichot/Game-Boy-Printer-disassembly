@@ -14,7 +14,7 @@ P0CR       equ $0A   ; port 0 direction
 P1CR       equ $0B   ; port 1 direction
 P6CR       equ $0C   ; port 6 direction
 P7CR       equ $0D   ; port 7 direction (0xFF = output for SRAM writes)
-ADCCR      equ $0E   ; A/D control: low bits channel (0 temperature TH1?; 1 battery)
+ADCCR      equ $0E   ; A/D control: low bits channel (0 = temperature: other error 0x40 outside 0x35-0xD7 and strobe base time; 1 = battery: low battery 0x80 at 0x7E or below); bit6 start; bit7 end of conversion
 ADCDR      equ $0F   ; A/D result
 TREG1A     equ $10   ; timer 1 register A (16-bit): strobe tick length in us
 TREG1B     equ $12   ; timer 1 register B

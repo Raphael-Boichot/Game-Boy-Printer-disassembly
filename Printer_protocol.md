@@ -51,7 +51,7 @@ Boot (0x8000): `di`, `ld SP,$043F`, watchdog disabled by writing 0xB1 to WDTCR2 
 | Status register | 0x007C | internal, bit-reversed status byte |
 | SIO2 buffer | 0x0FF8–0x0FFF | Game Boy link (receive and transmit) |
 | External image SRAM | ports P3 (addr lo), P4 (addr hi \| 0xE0), P7 (data), P2.1/P2.2/P5.4 (strobes) | 0x1680 bytes used. Read routine A48F, write routine A4A4 |
-| ADC channel 0 | ADCCR 0x0E = 0x00, result 0x0F | head temperature (probably a thermistor); outside 0x35–0xD7 → "other error"; indexes the heat-time tables |
+| ADC channel 0 | ADCCR 0x0E = 0x00, result 0x0F | temperature: outside 0x35–0xD7 → "other error" (0x40); indexes the heat-time tables (higher reading = longer strobes, as for an NTC thermistor read colder). Probably TH1 on the main board |
 | ADC channel 1 | ADCCR 0x0E = 0x01 | battery; ≤ 0x7E → "low battery" |
 | Port P2.0 | 0x02 bit 0 | front button (active low): paper feed, or self-test at power-on |
 | Ports P0/P1 | 0x00/0x01 | head strobe and motor phases, written from tables by the TC1 interrupt |
@@ -380,6 +380,8 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 | Print with 0 sheets and margin 3 | busy (paper feed only) |
 | Battery or head temperature out of range at power-on | FF to every packet (power-on lockout never lifted) |
 | Battery dropping during a print | 06 → 86 → 84 (print aborted) |
+| ADC channel 0 set before Print: 0x34 / 0x35 / 0xD7 / 0xD8 | 44 / prints / prints / 44: other error outside 0x35–0xD7, job refused; set during a print: 06 → 46 → 44 (aborted) |
+| ADC channel 1 set before Print: 0x7F / 0x7E | prints / 04 → 84: low battery at 0x7E or below, job not started |
 | Encoder stops during a print: status, Init, status | 28 28 28 (jam + unprocessed, sticky) |
 | Front button held until the homing ends | self-test band printed (status 02 then 00); released earlier: no self-test |
 | Copies | 2 sheets take exactly twice the motor pulses of 1 |

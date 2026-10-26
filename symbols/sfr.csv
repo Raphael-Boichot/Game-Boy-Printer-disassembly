@@ -11,7 +11,7 @@ addr,name,desc
 0B,P1CR,port 1 direction
 0C,P6CR,port 6 direction
 0D,P7CR,port 7 direction (0xFF = output for SRAM writes)
-0E,ADCCR,A/D control: low bits channel (0 temperature TH1?; 1 battery), bit6 start, bit7 end of conversion
+0E,ADCCR,A/D control: low bits channel (0 = temperature: other error 0x40 outside 0x35-0xD7 and strobe base time; 1 = battery: low battery 0x80 at 0x7E or below); bit6 start; bit7 end of conversion
 0F,ADCDR,A/D result
 10,TREG1A,timer 1 register A (16-bit): strobe tick length in us
 12,TREG1B,timer 1 register B
