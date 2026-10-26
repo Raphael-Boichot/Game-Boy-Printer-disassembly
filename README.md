@@ -3,7 +3,7 @@ Disassembly of the Game Boy Camera, TMP87C840 Toshiba ROM version. Work in progr
 
 ## The board (IF-GBP-02)
 
-| Owner's photo | Head lines marked |
+| [InsideGadgets's photo](https://www.insidegadgets.com/2019/03/03/inside-the-game-boy-pocket-printer/) | Head lines marked |
 |---|---|
 | ![IF-GBP-02 board](hardware/IF-GBP-02_board.jpg) | ![IF-GBP-02 board, head lines](hardware/IF-GBP-02_board_head_lines.jpg) |
 
