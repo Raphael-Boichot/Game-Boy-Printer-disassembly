@@ -247,7 +247,7 @@ A temperature reading outside 0x35–0xD7 aborts with "other error" instead. Hot
 How the head is driven (from the code, reproduced in the emulator, timing checked against the owner's scope on a real printer):
 
 - Each encoder pulse (INT3) starts one strobe **burst**: 33 ticks of timer TC1, each `TREG1A` µs long (about 95–103 µs at exposure 0x40). On every tick the TC1 handler writes the next pair of bytes from two RAM tables (0x0360/0x0383 or 0x03A6/0x03C9, used alternately) to ports P0 and P1. The 16 port lines stay on for as many ticks as the dot's grey level needs.
-- A 640-byte band (16 pixel rows) takes **160 bursts**, 10 per pixel row. Bursts are 4.00 ms apart while a band prints, and a full 9-band picture takes about 9.9 s.
+- A 640-byte band (16 pixel rows) takes **160 bursts, one per pixel column**. The 16 strobe lines are the band's 16 rows (P0.0 = row 0 … P1.7 = row 15), so each burst prints one 16-dot column and the head sweeps across the 160 columns. In the emulator a black top row lights line P0.0 in all 160 bursts, and a black left column lights all 16 lines in burst 0 only. Bursts are 4.00 ms apart (one pixel column = 4 ms, as on the real printer), and a full 9-band picture takes about 9.9 s. The mechanism states 0x01–0x10 are the column states (16 per cycle, 10 cycles per band); 0x12 starts a band and 0x13 moves to the next one.
 - On-time per burst at exposure 0x40, middle of a full picture (emulator, head-temperature reading ≤ 0x60):
 
   | Level | Emulator | Real printer (owner's scope) |
@@ -397,6 +397,7 @@ Packets sent before step 3 are answered 0xFF.
 
 ## 13. Method and files
 
+- `tools/build_listing.py`: builds `TMP87C840_printer_rom.asm` from the symbol files in `symbols/` (names, RAM, flag bits, registers, data types), with checks and a byte round trip that must give the ROM md5 again (`symbols/README.md`).
 - `tools/t870.py`: a TLCS-870 disassembler written for this work, based on MAME's `tlcs870d.cpp` opcode map. Note: `T`/`F` jump conditions test the CPU's JF flag; they are not always/never. After `test`, `jr T` is taken when the bit is **0**.
 - `tools/trace.py` (`python3 tools/trace.py ROM.bin OUT.asm ABA1` regenerates the listing exactly): recursive tracer from the 16 interrupt vectors. It follows calls, branches and the 33 `jp (PC+A)` jump tables (one 30-entry state table at 0xAB65, and 32 tables at 0xBED7–0xCA58 in the head-strobe pattern code). About 16 KB of the 24.7 KB used ROM is reached as code; the rest is lookup tables and the test image.
 - `TMP87C840_printer_rom.asm`: the full annotated-label disassembly (vectors named `V_FFxx`, subroutines `Sxxxx`, branch targets `Lxxxx`, jump-table targets `Jxxxx`; data as `db`/`dw`).

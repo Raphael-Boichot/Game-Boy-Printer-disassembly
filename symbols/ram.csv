@@ -1,0 +1,66 @@
+addr,size,name,tag,desc
+0040,32,RegBanks,C,register banks 0-3 (8 bytes each: A W C B E D L H); bank 1 TC1 handler; bank 2 INT3 handler; bank 3 SIO2 receiver
+0060,16,ColumnDots,I,dot values of the column being prepared (copied from 0xB8-0xD6)
+0070,1,MechFlags,C,mechanism flags
+0071,1,SysFlags,C,system flags
+0072,1,LineCounter,C,mechanism step counter; indexes the heat-compensation curve
+0073,1,MechState,C,mechanism state (0 idle; 01-10 print columns; 11 homing; 12 band start; 13 band advance; 14 top margin; 15 bottom margin; 16 feed only; 17 button feed; 18 stop)
+0074,2,LineBufWr,I,line buffer write pointer (0x0100-0x023F)
+0076,2,LineBufRd,I,line buffer read pointer
+0078,1,HeatTime,C,strobe base time = HeatBase + ExposureOffset
+0079,1,HeatBase,C,base time from the temperature table 0xCEF6
+007A,1,ExposureOffset,C,offset from the exposure table 0xCFF6
+007B,1,MechRequests,C,requests to the mechanism (also low 5 bits of an encoder count)
+007C,1,Status,C,printer status as sent (bit-reversed: internal bit k = protocol bit 7-k)
+007D,1,MarginBefore,C,margin before printing (print argument byte 1 high nibble)
+007E,1,MarginBeforeLeft,I,margin before: units left
+007F,1,MarginAfter,C,margin after printing (argument byte 1 low nibble)
+0080,1,FeedLeft,C,feed units left
+0081,1,FeedOnlyAmount,C,feed amount for a print with 0 sheets
+0083,2,PrintReadPos,C,SRAM read position while printing
+0085,2,ImageBytes,C,valid image bytes in SRAM (max 0x1680)
+00D7,2,RxResume,C,receiver coroutine resume address
+00D9,1,RxFlags,C,receiver flags
+00DA,1,RxErrFlags,C,receiver error and control flags
+00DB,1,CmdRequests,C,commands posted by the receiver to the main loop
+00DC,2,RingWr,C,receive ring buffer write pointer
+00DE,2,RingRd,C,receive ring buffer read pointer
+00E0,1,DecodeFlags,C,data decoder and tick flags
+00E1,1,JobFlags,C,print job flags
+00E2,2,SlotBase,C,SRAM slot base (multiple of 0x280)
+00E4,2,SlotOffset,C,offset in the current 640-byte slot
+00E6,1,RleByte,C,RLE repeated byte
+00E7,1,RleCount,C,RLE run count
+00E8,1,LowBatTimer,I,low-battery reporting timer
+00E9,1,Copies,C,copies left (print argument byte 0)
+00EA,2,SavedSlotBase,C,rollback copy of SlotBase
+00EC,2,SavedImageBytes,C,rollback copy of ImageBytes
+00EE,2,SavedSlotOffset,C,rollback copy of SlotOffset
+00F0,2,RxSavedEIR,C,EIR saved by the receiver
+00F3,1,EncoderTimeout,C,ticks without an encoder pulse (jam at overflow)
+00F4,1,CamTimeout,C,ticks without a cam sensor change (jam at overflow)
+00F5,1,SelfTest,C,1 = self-test requested at power-on
+00F6,1,StartDelay,I,tick counter before a job starts
+00F7,1,IdleDelay,I,tick counter before idle mode
+00F8,1,BandColumns,I,columns left in the band
+00FD,1,TempAdc,C,last temperature reading
+00FE,1,MechSubState,C,sub-state of the current mechanism state
+00FF,1,Palette,C,palette (print argument byte 2; 0 = no remapping)
+0100,320,LineBuf,I,image bytes fetched from SRAM for printing (32-byte chunks)
+0240,32,ColumnSource,I,bytes the current column is extracted from
+0360,35,StrobeA_P0,C,strobe tick table A for P0 (rows 0-7): one byte per TC1 tick
+0383,35,StrobeA_P1,C,strobe tick table A for P1 (rows 8-15)
+03A6,35,StrobeB_P0,C,strobe tick table B for P0
+03C9,35,StrobeB_P1,C,strobe tick table B for P1
+03EC,1,PktCommand,C,packet command
+03ED,1,PktCompress,C,packet compression flag
+03EE,2,PktLength,C,packet payload length
+03F0,4,PktArgs,C,first 4 payload bytes of non-data packets
+03F4,32,RingBuf,C,receive ring buffer (serial interrupt -> decoder)
+0414,2,PktChecksum,C,running checksum
+0416,2,PktRemaining,C,payload bytes left
+0419,2,HeatCurvePtr,C,pointer to the heat-compensation curve (0xDB88 or 0xDC7B)
+041B,1,BattAtStart,I,battery reading at job start
+041C,1,ActivityTimer,C,reloaded with 0xF3 by every received byte; idle reset when it wraps
+041E,1,BlankColumns,I,count of blank columns
+0FF8,8,Sio2Buf,C,SIO2 data buffer (shared transmit / receive)

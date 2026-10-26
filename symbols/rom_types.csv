@@ -1,0 +1,25 @@
+start,end,type,width,tag,note
+A57E,AA7D,words,,C,Tab_SramLayout
+BEB6,BEBD,words,,I,Tab_ColumnTabPtrs
+CCB6,CCF5,bytes,16,?,Tab_PlaneCombine
+CCF6,CEF5,bytes,16,C,Tab_DotTicks
+CEF6,CFF5,bytes,16,C,Tab_HeatBaseByTemp
+CFF6,D075,bytes,16,C,Tab_ExposureOffset
+D076,D175,bytes,16,I,Tab_ParamByTemp
+D176,D275,bytes,16,?,
+D276,D375,bytes,16,?,
+D376,D475,bytes,16,?,
+D476,D575,bytes,16,?,
+D576,D675,bytes,16,?,
+D676,D775,bytes,16,?,
+D776,D875,bytes,16,?,
+D876,DA75,bytes,16,?,
+DA76,DB75,bytes,16,?,
+DB76,DB87,bytes,18,?,
+DB88,DC68,bytes,16,I,heat curve
+DC69,DC7A,bytes,18,?,
+DC7B,DD5B,bytes,16,I,heat curve
+DD5C,DD84,bytes,16,I,
+DDEE,E06D,bytes,16,C,2bpp tiles
+E071,FFDF,fill,,C,"unused, 0xFF"
+FFE0,FFFF,words,,C,interrupt vectors (FFE0 INT5 ... FFFE reset)

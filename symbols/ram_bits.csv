@@ -1,0 +1,62 @@
+addr,bit,name,tag,desc
+0070,0,LineReady,I,column data prepared
+0070,1,LineFetch,I,line buffer refill pending
+0070,2,CamSeen,C,set by INT4 when the cam sensor rises
+0070,3,MechActive,C,mechanism job running
+0070,4,StrobeBufB,C,toggled per burst: 0 = table A; 1 = table B
+0070,5,EncoderSeen,C,set by every encoder pulse
+0070,6,LineBufFill,C,refill the line buffer from SRAM
+0071,0,MemFull,C,image memory full (0x1680 bytes)
+0071,1,EndMarkMask,C,hide 'image data full' in replies until a status poll
+0071,2,TickRunning,I,main tick configured for activity (not idle)
+0071,3,CamChange,C,cam sensor change pending
+0071,4,CamLevel,C,last cam sensor level
+0071,5,PowerOnLock,C,set at boot; cleared when homing ends; packets answered 0xFF meanwhile
+0071,6,LowBatSeen,I,low battery detected
+0071,7,Idle,C,idle mode entered
+007B,0,ReqHoming,C,power-on homing request
+007B,1,ReqFeed,C,paper feed request
+007B,2,ReqPrint,C,print request
+007C,0,StLowBattery,C,protocol 0x80
+007C,1,StOtherError,C,protocol 0x40
+007C,2,StPaperJam,C,protocol 0x20
+007C,3,StPacketError,C,protocol 0x10
+007C,4,StUnprocessed,C,protocol 0x08
+007C,5,StImageFull,C,protocol 0x04
+007C,6,StBusy,C,protocol 0x02
+007C,7,StChecksumErr,C,protocol 0x01
+00D9,0,RxInPacket,C,receiver coroutine is waiting for a byte
+00D9,1,LowBatHold,I,withhold low battery from replies
+00D9,2,LowBatReported,I,low battery has been reported
+00D9,3,RxIsData,C,current packet is a data packet
+00D9,4,RxDataOk,C,data packet accepted
+00D9,5,RxEndMark,C,empty data packet received
+00D9,6,RxCompressed,C,current data packet is compressed
+00D9,7,RxActive,C,packet in progress
+00DA,0,PacketError,C,current packet broke a rule
+00DA,1,RxIgnored,C,payload ignored (no command posted)
+00DA,2,BlankLine,I,column is blank
+00DA,3,DecCompressed,C,decoder: packet is compressed
+00DA,4,SyncLostBusy,C,sync lost while printing: treat packets as junk until the job ends
+00DA,5,BreakBlock,C,after Break: data packets give a packet error until Init
+00DA,7,DataAbort,C,roll back the data packet
+00DB,4,ReqStatus,C,status command posted
+00DB,5,ReqBreak,C,break command posted
+00DB,6,ReqPrint,C,print command posted
+00DB,7,ReqInit,C,init command posted
+00E0,0,DataPending,C,data packet started
+00E0,1,Decoding,C,decoder busy with a packet
+00E0,2,DecodeStarted,I,decoder initialised for the packet
+00E0,3,RleInRun,C,inside an RLE run
+00E0,4,RleLiteral,C,run is literal bytes
+00E0,5,RleRepeat,C,run repeats one byte
+00E0,6,RleHaveByte,C,repeat byte loaded
+00E0,7,Tick,C,main tick (set by INTTC2)
+00E1,0,AfterPrint,C,a print was accepted (next data starts a new image)
+00E1,1,Printing,C,printing
+00E1,2,Feeding,C,feeding paper
+00E1,3,BreakReq,C,stop requested by Break
+00E1,4,ReplyPending,I,?
+00E1,5,BattCheckDue,I,battery check under load pending
+00E1,6,InitDeferred,I,init received during button feed
+00E1,7,BattSample,I,take a battery sample at the next strobe burst

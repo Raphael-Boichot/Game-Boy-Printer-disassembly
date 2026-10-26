@@ -1,0 +1,2 @@
+addr,reason
+B984,unreferenced subroutine (bit reverse), kept as dead code

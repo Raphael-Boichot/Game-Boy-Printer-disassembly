@@ -1,0 +1,158 @@
+addr,name,tag,note
+8000,Reset,C,"boot: stack, watchdog off, ports, RAM clear, SRAM test, timers, SIO2, battery check, self-test check"
+80A8,Boot_SettleDelay,I,busy-wait before the first battery reading
+80D5,Main_Loop,C,"main loop: watchdog clear, idle entry check, then the tick work"
+8128,Main_EnterIdle,C,nothing to do: slow tick (TREG2 0x03D5 = 1.0 s) and IDLE mode until an interrupt
+82B6,Main_CheckTempBattery,I,
+82BB,Main_Wake,I,back from idle: normal tick
+82D0,Main_Tick,C,work done once per 10.24 ms tick (flag E0.7)
+82DC,Main_IdleResetTimer,C,counts ActivityTimer while not busy; wrap = reset as Init
+8379,Main_StartDelay,I,
+8505,Main_LowBattery,I,low-battery handling
+8529,Main_CamWatchdog,C,jam if the cam sensor does not change within 13 ticks (high) / 51 ticks (low)
+8564,Main_Commands,C,run the commands posted by the receiver (CmdRequests)
+857B,Cmd_Init,C,"clear image memory, decoder, image-full, unprocessed (unless jammed), break block"
+85AB,Cmd_Print,C,"take the 4 print arguments: copies, margins, palette, exposure"
+85F3,Cmd_Print_FeedOnly,C,0 copies or no image data: feed the after-margin only
+85FD,Cmd_Break,C,stop at the next feed phase; block data until Init
+8609,Main_JobControl,I,"job end, copies, busy flag"
+865C,Main_StartJob,C,start a mechanism job if no error
+8672,Job_StartHoming,C,state 0x11 (power-on homing)
+86AA,Job_StartFeed,C,state 0x16 (feed only)
+86C5,Job_ButtonFeed,C,state 0x17 while the front button is pressed
+86E0,Job_StartPrint,C,"print: temperature check, heat time, line pipeline set-up"
+8712,Job_TempError,C,temperature reading outside 0x35-0xD7: other error (0x40)
+871D,Job_SetHeatTime,C,HeatTime = Tab_HeatBaseByTemp[temp] + ExposureOffset
+8808,Line_PrepareBand,I,extract and convert the next column for the strobe tables
+8D7A,Main_LinePipeline,I,line buffer refill / column preparation scheduling
+8E1C,Line_BuildColumnA,I,build strobe table A for the next column
+9829,Line_BuildColumnB,I,build strobe table B for the next column
+A29D,Main_RefillLineBuf,C,copy 32-byte chunks from SRAM into LineBuf while printing
+A2ED,Data_Main,C,"data decoder: runs in the main loop, fed by the ring buffer"
+A327,Data_Loop,C,decode bytes until the packet ends
+A34B,Data_PadSlot,C,compressed packet ended early: pad the slot to 640 bytes with 0x00
+A382,Data_Rollback,C,bad packet: restore the saved pointers
+A39B,Data_Commit,C,"packet stored: set unprocessed (0x08), update ImageBytes"
+A3AD,Data_StoreByte,C,store one decoded byte; advance the slot every 640 bytes
+A409,Sub_CheckTempBattery,C,temperature (other error) and battery (low battery) checks
+A45E,Sub_PrimeLineBuf,I,clear LineBuf and preload 0x120 bytes from SRAM
+A48F,Sram_Read,C,A = SRAM[BC]
+A4A4,Sram_Write,C,SRAM[BC] = A
+A4C0,Rle_NextByte,C,next decoded byte from the ring buffer (CF = 1: none yet)
+A564,Sram_StorePos,C,SRAM position of the next packet byte: SlotBase + Tab_SramLayout[SlotOffset]
+A57E,Tab_SramLayout,C,640 words: packet byte index -> offset in its SRAM slot (tiles reordered by column)
+AA7E,Int_TC1_StrobeTick,C,"TC1: write the next tick bytes to P0/P1; after 33 ticks stop TC1, sample battery"
+AAC0,Int_TC3_BatteryCheck,C,TC3: battery reading under load
+AAE6,Int_INT5_Unused,C,
+AAE7,Int_INT4_CamSensor,C,cam sensor rising edge: MechFlags.CamSeen
+AAED,Int_INT3_Encoder,C,"encoder pulse: start a strobe burst, then run the mechanism state"
+AB62,Mech_Dispatch,C,jump through the state table with MechState
+ABA3,Mech_State00_Idle,I,
+ABAE,Mech_State01_Column,C,"print states 01-10: one pixel column per state, 16 states per cycle, 10 cycles per band"
+AC06,Mech_State02_Column,C,
+AC43,Mech_State03_Column,C,
+AC80,Mech_State04_Column,C,
+ACBD,Mech_State05_Column,C,
+ACFA,Mech_State06_Column,C,
+AD37,Mech_State07_Column,C,
+AD76,Mech_State08_Column,C,
+ADB3,Mech_State09_Column,C,
+ADF0,Mech_State0A_Column,C,
+AE2D,Mech_State0B_Column,C,
+AE6A,Mech_State0C_Column,C,
+AEA7,Mech_State0D_Column,C,
+AEE4,Mech_State0E_Column,C,
+AF21,Mech_State0F_Column,C,
+AF60,Mech_State10_Column,C,last column state of a cycle
+B05F,Mech_State11_Homing,C,"power-on homing: find the cam sensor twice, stop 3 pulses after; clears PowerOnLock"
+B0FB,Mech_State12_BandStart,C,before each band (13 pulses in the emulator)
+B10D,Mech_State13_BandAdvance,C,between bands (115 pulses in the emulator)
+B121,Mech_State14_TopMargin,C,margin before printing
+B181,Mech_State15_BottomMargin,C,margin after printing (also the self-test)
+B22C,Mech_State16_FeedOnly,C,print with 0 copies
+B2A6,Mech_State17_ButtonFeed,C,front button feed
+B328,Mech_State18_Stop,C,stop after low battery or Break
+B369,Mech_StateInvalid,I,states 0x19-0x1E
+B370,Int_TC2_Tick,C,main tick: set DecodeFlags.Tick
+B373,Int_SIO2_Receiver,C,packet receiver (coroutine resumed at RxResume after each byte)
+B38A,Rx_PacketStart,C,first byte: must be 0x88 (0x11 bit-reversed)
+B3B4,Rx_AbortFF,C,reply 0xFF and drop the packet
+B3B6,Rx_Exit,C,end of packet
+B3BF,Rx_SyncLost,C,"bad first byte: Init if idle, answer 0xFF until the inter-byte timeout"
+B3E2,Rx_Header,C,"command, compression, length; checksum starts"
+B4D4,Rx_CheckCommand,C,
+B50B,Rx_Data,C,data packet checks
+B588,Rx_DataPayload,C,payload bytes into the ring buffer
+B5EF,Rx_Checksum,C,checksum bytes; the status reply is built before the comparison
+B691,Rx_Reply,C,queue 0x81 and the status byte
+B6C9,Rx_PostCommand,C,post the command to the main loop if no error
+B744,Rx_OtherCommand,C,print / break / status / unknown
+B788,Rx_ReadArgs,C,keep up to 4 payload bytes in PktArgs
+B869,Rx_SkipWithError,C,packet error; sum and drop the payload
+B8B0,Rx_DataTooLong,C,length >= 0x400
+B8BC,Rx_DataWhileBusy,C,
+B8BE,Rx_IgnorePayload,C,ignored packet: payload summed (or skipped while busy)
+B984,Sub_BitReverse_Unused,C,unreferenced: A = bit-reversed A (the receiver inlines the same code); dead
+B99E,Int_TC4_ByteTimeout,C,"no byte for 5.12 ms: abort the packet, roll back data"
+B9B4,Rx_WaitByte,C,save the return address in RxResume and leave the interrupt
+B9C2,Line_CopyColumnSource,I,
+BA51,Line_ExtractColumn,I,one bit position of the source bytes = one pixel column
+BB39,Line_ColumnDots,I,combine the two bit planes into dot values (table 0xCCB6)
+BBED,Line_ColumnHeat,I,
+BEB6,Tab_ColumnTabPtrs,I,"4 pointers: 0xD476, 0xD576, 0xD676, 0xD776 (used at 8FC6, 8FF2, 901E)"
+BEBE,StrobeA_Row00,C,set P0.0 (band row 0) in strobe table A for the dot's tick count
+BF1D,StrobeA_Row01,C,set P0.1 (band row 1) in strobe table A for the dot's tick count
+BF7C,StrobeA_Row02,C,set P0.2 (band row 2) in strobe table A for the dot's tick count
+BFDB,StrobeA_Row03,C,set P0.3 (band row 3) in strobe table A for the dot's tick count
+C03A,StrobeA_Row04,C,set P0.4 (band row 4) in strobe table A for the dot's tick count
+C099,StrobeA_Row05,C,set P0.5 (band row 5) in strobe table A for the dot's tick count
+C0F8,StrobeA_Row06,C,set P0.6 (band row 6) in strobe table A for the dot's tick count
+C157,StrobeA_Row07,C,set P0.7 (band row 7) in strobe table A for the dot's tick count
+C1B6,StrobeA_Row08,C,set P1.0 (band row 8) in strobe table A for the dot's tick count
+C215,StrobeA_Row09,C,set P1.1 (band row 9) in strobe table A for the dot's tick count
+C274,StrobeA_Row10,C,set P1.2 (band row 10) in strobe table A for the dot's tick count
+C2D3,StrobeA_Row11,C,set P1.3 (band row 11) in strobe table A for the dot's tick count
+C332,StrobeA_Row12,C,set P1.4 (band row 12) in strobe table A for the dot's tick count
+C391,StrobeA_Row13,C,set P1.5 (band row 13) in strobe table A for the dot's tick count
+C3F0,StrobeA_Row14,C,set P1.6 (band row 14) in strobe table A for the dot's tick count
+C44F,StrobeA_Row15,C,set P1.7 (band row 15) in strobe table A for the dot's tick count
+C4AE,StrobeB_Row00,C,set P0.0 (band row 0) in strobe table B for the dot's tick count
+C50D,StrobeB_Row01,C,set P0.1 (band row 1) in strobe table B for the dot's tick count
+C56C,StrobeB_Row02,C,set P0.2 (band row 2) in strobe table B for the dot's tick count
+C5CB,StrobeB_Row03,C,set P0.3 (band row 3) in strobe table B for the dot's tick count
+C62A,StrobeB_Row04,C,set P0.4 (band row 4) in strobe table B for the dot's tick count
+C689,StrobeB_Row05,C,set P0.5 (band row 5) in strobe table B for the dot's tick count
+C6E8,StrobeB_Row06,C,set P0.6 (band row 6) in strobe table B for the dot's tick count
+C747,StrobeB_Row07,C,set P0.7 (band row 7) in strobe table B for the dot's tick count
+C7A6,StrobeB_Row08,C,set P1.0 (band row 8) in strobe table B for the dot's tick count
+C805,StrobeB_Row09,C,set P1.1 (band row 9) in strobe table B for the dot's tick count
+C864,StrobeB_Row10,C,set P1.2 (band row 10) in strobe table B for the dot's tick count
+C8C3,StrobeB_Row11,C,set P1.3 (band row 11) in strobe table B for the dot's tick count
+C922,StrobeB_Row12,C,set P1.4 (band row 12) in strobe table B for the dot's tick count
+C981,StrobeB_Row13,C,set P1.5 (band row 13) in strobe table B for the dot's tick count
+C9E0,StrobeB_Row14,C,set P1.6 (band row 14) in strobe table B for the dot's tick count
+CA3F,StrobeB_Row15,C,set P1.7 (band row 15) in strobe table B for the dot's tick count
+CCB6,Tab_PlaneCombine,?,64 bytes used by Line_ColumnDots
+CCF6,Tab_DotTicks,C,"pairs (first tick, tick count) per dot value, used by the Strobe_* routines"
+CEF6,Tab_HeatBaseByTemp,C,256 bytes: strobe base time by temperature reading
+CFF6,Tab_ExposureOffset,C,"128 signed bytes: offset by exposure (-16 at 0x00, -7 at 0x40, +1 at 0x7F)"
+D076,Tab_ParamByTemp,I,256 bytes by temperature reading -> 0xF9
+D176,Tab_D176,?,used by Line_PrepareBand
+D276,Tab_D276,?,used by Line_PrepareBand
+D376,Tab_D376,?,
+D476,Tab_D476,?,via Tab_ColumnTabPtrs
+D576,Tab_D576,?,via Tab_ColumnTabPtrs
+D676,Tab_D676,?,via Tab_ColumnTabPtrs
+D776,Tab_D776,?,via Tab_ColumnTabPtrs
+D876,Tab_D876,?,
+DA76,Tab_DA76,?,indexed by an ADC reading
+DB76,Tab_DB76,?,
+DB88,Tab_HeatCurveInk,I,heat-compensation curve (column with dots)
+DC69,Tab_DC69,?,
+DC7B,Tab_HeatCurveBlank,I,heat-compensation curve (blank column)
+DD5C,Tab_HeatTrim,I,subtracted from the curve value (index 0x041E)
+DD85,Boot_SramTest,C,write and read back 0x1680 SRAM bytes; failure = other error (0x40)
+DDAD,SelfTest_Load,C,copy the self-test band to SRAM as one data packet
+DDEE,Gfx_SelfTestBand,C,"self-test image: 640 bytes, 20 x 2 tiles 2bpp (160 x 16 px)"
+E06E,Int_Unused_Reti,C,
+E06F,Int_Unused_Retn,C,

@@ -1,0 +1,38 @@
+addr,name,desc
+00,P0,port 0: head strobe lines for band rows 0-7 (bit n = row n)
+01,P1,port 1: head strobe lines for band rows 8-15
+02,P2,port 2: bit0 front button (input; 0 = pressed); bit1 SRAM /WE; bit2 SRAM /CE
+03,P3,port 3: SRAM address low
+04,P4,port 4: bits 0-4 SRAM address high (written OR 0xE0); bits 5-7 SIO2
+05,P5,port 5: bit0 encoder (INT3 pin); bit1 cam sensor (INT4 pin); bit2 motor (0 = run); bit3 ?; bit4 SRAM /OE
+06,P6,port 6
+07,P7,port 7: SRAM data bus
+0A,P0CR,port 0 direction
+0B,P1CR,port 1 direction
+0C,P6CR,port 6 direction
+0D,P7CR,port 7 direction (0xFF = output for SRAM writes)
+0E,ADCCR,A/D control: low bits channel (0 temperature TH1?; 1 battery), bit6 start, bit7 end of conversion
+0F,ADCDR,A/D result
+10,TREG1A,timer 1 register A (16-bit): strobe tick length in us
+12,TREG1B,timer 1 register B
+14,TC1CR,timer 1 control: 0x18 = start fc/2^3 (1 us), 0x08 = stop
+15,TC2CR,timer 2 control: 0x24 = start fc/2^13 (main tick)
+16,TREG2,timer 2 register (16-bit): 0x000A = 10.24 ms tick; 0x03D5 = 1.0 s in idle
+18,TREG3A,timer 3 register A
+19,TREG3B,timer 3 register B
+1A,TC3CR,timer 3 control
+1B,TREG4,timer 4 register: 0x14 = 20 counts
+1C,TC4CR,timer 4 control: 0xD0 = start fc/2^11 (inter-byte timeout 5.12 ms); 0xC0 = stop and clear
+20,SIO1CR1,serial 1 control 1 (unused)
+21,SIO1CR2,serial 1 control 2 (unused)
+22,SIO2CR1,serial 2 control 1: 0x67 = stop / 8-bit transmit-receive external clock; 0xA7 = start
+23,SIO2CR2,serial 2 control 2: bytes per transfer - 1
+34,WDTCR1,watchdog control 1
+35,WDTCR2,watchdog control 2: 0xB1 disables; 0x4E clears
+36,TBTCR,time base timer control
+37,EINTCR,external interrupt control
+38,SYSCR1,system control 1
+39,SYSCR2,system control 2: bit4 IDLE
+3A,EIR,interrupt enable register (16-bit; bit0 = IMF)
+3C,IL,interrupt latch (16-bit)
+3F,PSW,program status word / register bank
