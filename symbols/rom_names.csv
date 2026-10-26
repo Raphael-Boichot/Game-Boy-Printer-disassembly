@@ -1,14 +1,16 @@
 addr,name,tag,note
 8000,Reset,C,"boot: stack, watchdog off, ports, RAM clear, SRAM test, timers, SIO2, battery check, self-test check"
-80A8,Boot_SettleDelay,I,busy-wait before the first battery reading
+80A8,Boot_SettleDelay,C,"65,536-step busy-wait before the first battery reading"
 80D5,Main_Loop,C,"main loop: watchdog clear, idle entry check, then the tick work"
 8128,Main_EnterIdle,C,nothing to do: slow tick (TREG2 0x03D5 = 1.0 s) and IDLE mode until an interrupt
-82B6,Main_CheckTempBattery,I,
-82BB,Main_Wake,I,back from idle: normal tick
+815A,Heat_DecayIdle,C,per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
+82B6,Main_CheckTempBattery,C,periodic temperature and battery check (Sub_CheckTempBattery)
+82BB,Main_Wake,C,"back from idle: clear SysFlags.Idle, reload EncoderIdleCount"
 82D0,Main_Tick,C,work done once per 10.24 ms tick (flag E0.7)
 82DC,Main_IdleResetTimer,C,counts ActivityTimer while not busy; wrap = reset as Init
-8379,Main_StartDelay,I,
-8505,Main_LowBattery,I,low battery reported and its timer expired: clears P5.3 (power hold)
+8379,Main_StartDelay,C,"counts StartDelay (12 ticks, about 123 ms) before a job or the next copy starts"
+83AF,Heat_DecayTick,C,per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
+8505,Main_LowBattery,C,"after low battery: once reported (and LowBatTimer expired) or held while idle, clear P5.3"
 8529,Main_CamWatchdog,C,jam if the cam sensor does not change within 13 ticks (high) / 51 ticks (low)
 8564,Main_Commands,C,run the commands posted by the receiver (CmdRequests)
 857B,Cmd_Init,C,"clear image memory, decoder, image-full, unprocessed (unless jammed), break block"
@@ -23,10 +25,12 @@ addr,name,tag,note
 86E0,Job_StartPrint,C,"print: temperature check, heat time, line pipeline set-up"
 8712,Job_TempError,C,temperature reading outside 0x35-0xD7: other error (0x40)
 871D,Job_SetHeatTime,C,HeatTime = Tab_HeatBaseByTemp[temp] + ExposureOffset
-8808,Line_PrepareBand,I,extract and convert the next column for the strobe tables
-8D7A,Main_LinePipeline,I,line buffer refill / column preparation scheduling
-8E1C,Line_BuildColumnA,I,build strobe table A for the next column
-9829,Line_BuildColumnB,I,build strobe table B for the next column
+8808,Line_FirstColumn,C,"job start: extract, history, energy codes and heat accumulation for the first column"
+8D7A,Main_LinePipeline,C,"between bursts: refill LineBuf from SRAM when empty, else copy the next tile column and prepare the next column"
+8E1C,Line_NextColumnA,I,"same chain as Line_FirstColumn, unrolled, for the next column (strobe tables A)"
+9829,Line_NextColumnB,I,same chain for the strobe tables B
+A19D,Line_TileColumnDone,C,"after 8 pixel columns: next tile column; after 20, a new band"
+A1A4,Heat_BandStart,C,"new band: clear RowHistory, RowHeat -= Tab_BandCoolByTemp[temperature]"
 A29D,Main_RefillLineBuf,C,copy 32-byte chunks from SRAM into LineBuf while printing
 A2ED,Data_Main,C,"data decoder: runs in the main loop, fed by the ring buffer"
 A327,Data_Loop,C,decode bytes until the packet ends
@@ -35,7 +39,7 @@ A382,Data_Rollback,C,bad packet: restore the saved pointers
 A39B,Data_Commit,C,"packet stored: set unprocessed (0x08), update ImageBytes"
 A3AD,Data_StoreByte,C,store one decoded byte; advance the slot every 640 bytes
 A409,Sub_CheckTempBattery,C,temperature (other error) and battery (low battery) checks
-A45E,Sub_PrimeLineBuf,I,clear LineBuf and preload 0x120 bytes from SRAM
+A45E,Sub_PrimeLineBuf,C,"clear LineBuf and preload 0x120 bytes from SRAM (LineBufWr = 0x0220, LineBufRd = 0x0100)"
 A48F,Sram_Read,C,A = SRAM[BC]
 A4A4,Sram_Write,C,SRAM[BC] = A
 A4C0,Rle_NextByte,C,next decoded byte from the ring buffer (CF = 1: none yet)
@@ -47,7 +51,7 @@ AAE6,Int_INT5_ButtonWake,I,bare reti: the front button (P20 = INT5 pin) is enabl
 AAE7,Int_INT4_CamSensor,C,cam sensor rising edge: MechFlags.CamSeen
 AAED,Int_INT3_Encoder,C,"encoder pulse: start a strobe burst, then run the mechanism state"
 AB62,Mech_Dispatch,C,jump through the state table with MechState
-ABA3,Mech_State00_Idle,I,idle: counts PowerOffTimer and clears P5.3 (power hold) when it overflows
+ABA3,Mech_State00_Idle,C,"encoder pulse with no job: while idle, count EncoderIdleCount; on overflow (27 pulses) clear P5.3"
 ABAE,Mech_State01_Column,C,"print states 01-10: one pixel column per state, 16 states per cycle, 10 cycles per band"
 AC06,Mech_State02_Column,C,
 AC43,Mech_State03_Column,C,
@@ -95,11 +99,11 @@ B8BE,Rx_IgnorePayload,C,ignored packet: payload summed (or skipped while busy)
 B984,Sub_BitReverse_Unused,C,unreferenced: A = bit-reversed A (the receiver inlines the same code); dead
 B99E,Int_TC4_ByteTimeout,C,"no byte for 5.12 ms: abort the packet, roll back data"
 B9B4,Rx_WaitByte,C,save the return address in RxResume and leave the interrupt
-B9C2,Line_CopyColumnSource,I,
-BA51,Line_ExtractColumn,I,one bit position of the source bytes = one pixel column
-BB39,Line_ColumnDots,I,combine the two bit planes into dot values (table 0xCCB6)
-BBED,Line_ColumnHeat,I,
-BEB6,Tab_ColumnTabPtrs,I,"4 pointers: 0xD476, 0xD576, 0xD676, 0xD776 (used at 8FC6, 8FF2, 901E)"
+B9C2,Line_CopyColumnSource,C,copy the 32 bytes (2 stacked tiles x 16 rows x 2 planes) of the tile column being printed
+BA51,Line_ExtractColumn,C,pixel x = TileColumnX of each of the 16 rows -> ColumnPixels (0-3); ends with the palette remap
+BB39,Line_ColumnHistory,C,RowHistory = previous dot << 4 | current dot; ColumnHistCode = Tab_EnergyByHistory[RowHistory]
+BBED,Line_ColumnEnergy,C,"code = HeatTime + Tab_HeatCorr<grey>[RowHeatInt] + ColumnHistCode, clamped 0-0x64, into ColumnCodes"
+BEB6,Tab_HeatCorrPtrs,C,"pointers to Tab_HeatCorr0-3, by grey level"
 BEBE,StrobeA_Row00,C,set P0.0 (band row 0) in strobe table A for the dot's tick count
 BF1D,StrobeA_Row01,C,set P0.1 (band row 1) in strobe table A for the dot's tick count
 BF7C,StrobeA_Row02,C,set P0.2 (band row 2) in strobe table A for the dot's tick count
@@ -132,25 +136,24 @@ C922,StrobeB_Row12,C,set P1.4 (band row 12) in strobe table B for the dot's tick
 C981,StrobeB_Row13,C,set P1.5 (band row 13) in strobe table B for the dot's tick count
 C9E0,StrobeB_Row14,C,set P1.6 (band row 14) in strobe table B for the dot's tick count
 CA3F,StrobeB_Row15,C,set P1.7 (band row 15) in strobe table B for the dot's tick count
-CCB6,Tab_PlaneCombine,?,64 bytes used by Line_ColumnDots
-CCF6,Tab_DotTicks,C,"pairs (first tick, tick count) per dot value, used by the Strobe_* routines"
+CCB6,Tab_EnergyByHistory,C,"energy code by (previous dot, current dot), index prev*16+cur: white 0; black after white 0x6B, after black 0x4A"
+CCF6,Tab_DotTicks,C,"256 pairs (first tick, tick count) by energy code: the dot's on-window inside the 33-tick burst"
 CEF6,Tab_HeatBaseByTemp,C,256 bytes: strobe base time by temperature reading
 CFF6,Tab_ExposureOffset,C,"128 signed bytes: offset by exposure (-16 at 0x00, -7 at 0x40, +1 at 0x7F)"
-D076,Tab_ParamByTemp,I,256 bytes by temperature reading -> 0xF9
-D176,Tab_D176,?,used by Line_PrepareBand
-D276,Tab_D276,?,used by Line_PrepareBand
-D376,Tab_D376,?,
-D476,Tab_D476,?,via Tab_ColumnTabPtrs
-D576,Tab_D576,?,via Tab_ColumnTabPtrs
-D676,Tab_D676,?,via Tab_ColumnTabPtrs
-D776,Tab_D776,?,via Tab_ColumnTabPtrs
-D876,Tab_D876,?,
-DA76,Tab_DA76,?,indexed by an ADC reading
-DB76,Tab_DB76,?,
-DB88,Tab_HeatCurveInk,I,heat-compensation curve (column with dots)
-DC69,Tab_DC69,?,
-DC7B,Tab_HeatCurveBlank,I,heat-compensation curve (blank column)
-DD5C,Tab_HeatTrim,I,subtracted from the curve value (index 0x041E)
+D076,Tab_IdleCoolByTemp,C,"signed heat change per column of a white dot, by temperature (-> 0xF9)"
+D176,Tab_HeatAddByCode,C,"heat added per column by a continuing dot, by energy code"
+D276,Tab_HeatAddFreshByTemp,C,"256 words: heat added by a dot that follows a white one, by temperature"
+D476,Tab_HeatCorr0,C,"energy correction for grey level 0, by row heat (RowHeatInt)"
+D576,Tab_HeatCorr1,C,"energy correction for grey level 1, by row heat (RowHeatInt)"
+D676,Tab_HeatCorr2,C,"energy correction for grey level 2, by row heat (RowHeatInt)"
+D776,Tab_HeatCorr3,C,"energy correction for grey level 3, by row heat (RowHeatInt)"
+D876,Tab_BandCoolByTemp,C,"256 words: heat removed from every row at a band change, by temperature"
+DA76,Tab_DecayByTemp,C,"per-tick heat decay factor (/256), by temperature"
+DB76,Tab_TickCurvePtrsWarm,C,9 pointers (one per band) into Tab_TickCurvesWarm
+DB88,Tab_TickCurvesWarm,C,"9 curves x 25 steps: strobe tick length (us) per step of a band, head warm"
+DC69,Tab_TickCurvePtrsCold,C,9 pointers into Tab_TickCurvesCold
+DC7B,Tab_TickCurvesCold,C,9 curves x 25 steps: tick length when every row heat is zero (slightly longer)
+DD5C,Tab_TickTrimBySoak,C,"41 values subtracted from the tick length, by HeatSoak (bands since the head was cold)"
 DD85,Boot_SramTest,C,write and read back 0x1680 SRAM bytes; failure = other error (0x40)
 DDAD,SelfTest_Load,C,copy the self-test band to SRAM as one data packet
 DDEE,Gfx_SelfTestBand,C,"self-test image: 640 bytes, 20 x 2 tiles 2bpp (160 x 16 px)"

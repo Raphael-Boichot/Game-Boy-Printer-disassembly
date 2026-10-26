@@ -4,7 +4,7 @@ addr,name,desc
 02,P2,port 2: bit0 front button SW1 (P20 = INT5 pin 19; 0 = pressed; pull-up R24); bit1 SRAM /WE (P21 pin 21); bit2 SRAM /CE1 (P22 pin 22)
 03,P3,port 3: SRAM address A0-A7
 04,P4,"port 4: bits 0-4 SRAM address A8-A12 (written OR 0xE0); bits 5-7 SIO2 (P45 SCK2 -> link pin 5, P46 SI2 <- link pin 3, P47 SO2 -> link pin 2)"
-05,P5,"port 5: bit0 encoder (P50 = INT3: motor connector CN1 pin 3 through transistor Q10); bit1 cam sensor (P51 = INT4: CN1 pin 5, pull-up R29); bit2 motor (P52 -> Q8/Q9 -> Q6/Q7 -> CN1 pin 2; 0 = run, 1 = brake); bit3 power hold (P53 -> Q14 -> Q4/Q5: keeps the head supply and LED1 on; the firmware only clears it); bit4 SRAM /OE (P54)"
+05,P5,"port 5: bit0 encoder (P50 = INT3: motor connector CN1 pin 3 through transistor Q10); bit1 cam sensor (P51 = INT4: CN1 pin 5, pull-up R29); bit2 motor (P52 -> Q8/Q9 -> Q6/Q7 -> CN1 pin 2; 0 = run, 1 = brake); bit3 supply control (P53 -> Q14 -> the Q4/Q5 latch of the head supply, which also lights LED1; cleared on low battery and after 27 encoder pulses while idle; never set again); bit4 SRAM /OE (P54)"
 06,P6,port 6
 07,P7,port 7: SRAM data bus D0-D7
 0A,P0CR,port 0 direction

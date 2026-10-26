@@ -37,12 +37,12 @@ All of this is AI work, from reading the code and running it in the emulator, wa
 | Level | State |
 |---|---|
 | L0 listing reassembles to the same md5 | done: `tools/t870asm.py` assembles the instruction and data text of the listing (ignoring the hex column, computing every address itself) to md5 `aa393ec87ccb4220200255ab5adf8ac9`; the build checks it every time |
-| L1 every byte typed | done: code 16,220 B, jump tables 2,238 B, tables 6,263 B, fill 8,047 B |
+| L1 every byte typed | done: code 16,220 B, jump tables 2,238 B, tables 6,263 B (3,883 B byte tables + 2,380 B word tables), fill 8,047 B |
 | L2 code traced and run | done: all indirect jumps resolved; 88 % of the code bytes run in the emulator, nothing runs outside the trace |
-| L3 names | 157 ROM names (all routines, states, tables, receiver and command blocks); 902 short branch targets keep automatic labels |
-| L4 RAM and registers in the source | done for the listing: 65 variables, 61 flag bits, 37 registers |
+| L3 names | 160 ROM names, 76 RAM variables, 61 flag bits, 37 registers: 286 tagged C, 11 I, 0 ?; 898 short branch targets keep automatic labels |
+| L4 RAM and registers in the source | done: every RAM variable, flag bit and register the code uses is named in the listing |
 | L5 buildable tree | not done |
-| L6 understanding | protocol verified in the emulator; strobe timing matches a real printer; open: the column-preparation code (Line_*), several tables (`symbols/README.md`) |
+| L6 understanding | protocol verified in the emulator; strobe timing matches a real printer; the head energy model (per-dot history, per-element heat, tick curves) and every table decoded; 11 inferred names left (`symbols/README.md`) |
 
 ## Sources
 

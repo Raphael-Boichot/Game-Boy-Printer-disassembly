@@ -7,7 +7,7 @@ P1         equ $01   ; port 1 (QFP pins 11-18): head strobe lines for band rows 
 P2         equ $02   ; port 2: bit0 front button SW1 (P20 = INT5 pin 19; 0 = pressed; pull-up R24); bit1 SRAM /WE (P21 pin 21); bit2 SRAM /CE1 (P22 pin 22)
 P3         equ $03   ; port 3: SRAM address A0-A7
 P4         equ $04   ; port 4: bits 0-4 SRAM address A8-A12 (written OR 0xE0); bits 5-7 SIO2 (P45 SCK2 -> link pin 5, P46 SI2 <- link pin 3, P47 SO2 -> link pin 2)
-P5         equ $05   ; port 5: bit0 encoder (P50 = INT3: motor connector CN1 pin 3 through transistor Q10); bit1 cam sensor (P51 = INT4: CN1 pin 5, pull-up R29); bit2 motor (P52 -> Q8/Q9 -> Q6/Q7 -> CN1 pin 2; 0 = run, 1 = brake); bit3 power hold (P53 -> Q14 -> Q4/Q5: keeps the head supply and LED1 on; the firmware only clears it); bit4 SRAM /OE (P54)
+P5         equ $05   ; port 5: bit0 encoder (P50 = INT3: motor connector CN1 pin 3 through transistor Q10); bit1 cam sensor (P51 = INT4: CN1 pin 5, pull-up R29); bit2 motor (P52 -> Q8/Q9 -> Q6/Q7 -> CN1 pin 2; 0 = run, 1 = brake); bit3 supply control (P53 -> Q14 -> the Q4/Q5 latch of the head supply, which also lights LED1; cleared on low battery and after 27 encoder pulses while idle; never set again); bit4 SRAM /OE (P54)
 P6         equ $06   ; port 6
 P7         equ $07   ; port 7: SRAM data bus D0-D7
 P0CR       equ $0A   ; port 0 direction
@@ -41,7 +41,7 @@ IL         equ $3C   ; interrupt latch (16-bit)
 PSW        equ $3F   ; program status word / register bank
 
 RegBanks         equ $0040   ; [C] 32 byte(s). register banks 0-3 (8 bytes each: A W C B E D L H); bank 1 TC1 handler; bank 2 INT3 handler; bank 3 SIO2 receiver
-ColumnDots       equ $0060   ; [I] 16 byte(s). dot values of the column being prepared (copied from 0xB8-0xD6)
+RowHeatInt       equ $0060   ; [C] 16 byte(s). integer part of RowHeat per row, taken for the column being prepared
 MechFlags        equ $0070   ; [C] 1 byte(s). mechanism flags
 ;   .0 LineReady      [I] column data prepared
 ;   .1 LineFetch      [I] line buffer refill pending
@@ -53,16 +53,16 @@ MechFlags        equ $0070   ; [C] 1 byte(s). mechanism flags
 SysFlags         equ $0071   ; [C] 1 byte(s). system flags
 ;   .0 MemFull        [C] image memory full (0x1680 bytes)
 ;   .1 EndMarkMask    [C] hide 'image data full' in replies until a status poll
-;   .2 TickRunning    [I] main tick configured for activity (not idle)
+;   .2 TickRunning    [C] normal 10.24 ms tick (cleared in idle, where the tick is 1 s)
 ;   .3 CamChange      [C] cam sensor change pending
 ;   .4 CamLevel       [C] last cam sensor level
 ;   .5 PowerOnLock    [C] set at boot; cleared when homing ends; packets answered 0xFF meanwhile
-;   .6 LowBatSeen     [I] low battery detected
+;   .6 SupplyCut      [C] P5.3 has been cleared after low battery
 ;   .7 Idle           [C] idle mode entered
 LineCounter      equ $0072   ; [C] 1 byte(s). mechanism step counter; indexes the heat-compensation curve
 MechState        equ $0073   ; [C] 1 byte(s). mechanism state (0 idle; 01-10 print columns; 11 homing; 12 band start; 13 band advance; 14 top margin; 15 bottom margin; 16 feed only; 17 button feed; 18 stop)
-LineBufWr        equ $0074   ; [I] 2 byte(s). line buffer write pointer (0x0100-0x023F)
-LineBufRd        equ $0076   ; [I] 2 byte(s). line buffer read pointer
+LineBufWr        equ $0074   ; [C] 2 byte(s). line buffer write pointer (0x0100-0x0220, 32-byte steps; checked in the emulator)
+LineBufRd        equ $0076   ; [C] 2 byte(s). line buffer read pointer
 HeatTime         equ $0078   ; [C] 1 byte(s). strobe base time = HeatBase + ExposureOffset
 HeatBase         equ $0079   ; [C] 1 byte(s). base time from the temperature table 0xCEF6
 ExposureOffset   equ $007A   ; [C] 1 byte(s). offset from the exposure table 0xCFF6
@@ -80,17 +80,22 @@ Status           equ $007C   ; [C] 1 byte(s). printer status as sent (bit-revers
 ;   .6 StBusy         [C] protocol 0x02
 ;   .7 StChecksumErr  [C] protocol 0x01
 MarginBefore     equ $007D   ; [C] 1 byte(s). margin before printing (print argument byte 1 high nibble)
-MarginBeforeLeft equ $007E   ; [I] 1 byte(s). margin before: units left
+MarginBeforeLeft equ $007E   ; [C] 1 byte(s). margin units left in state 0x14
 MarginAfter      equ $007F   ; [C] 1 byte(s). margin after printing (argument byte 1 low nibble)
 FeedLeft         equ $0080   ; [C] 1 byte(s). feed units left
 FeedOnlyAmount   equ $0081   ; [C] 1 byte(s). feed amount for a print with 0 sheets
+TileColumnX      equ $0082   ; [C] 1 byte(s). pixel column inside the current tile (0-7)
 PrintReadPos     equ $0083   ; [C] 2 byte(s). SRAM read position while printing
 ImageBytes       equ $0085   ; [C] 2 byte(s). valid image bytes in SRAM (max 0x1680)
+ColumnPixels     equ $0087   ; [C] 16 byte(s). dot values (0-3, after the palette) of the 16 rows of the column
+ColumnHistCode   equ $0097   ; [C] 16 byte(s). Tab_EnergyByHistory code per row
+RowHistory       equ $00A7   ; [C] 16 byte(s). per row: previous dot << 4 | current dot
+RowHeat          equ $00B7   ; [C] 32 byte(s). 16 words, 8.8 fixed point: modelled heat of each head element
 RxResume         equ $00D7   ; [C] 2 byte(s). receiver coroutine resume address
 RxFlags          equ $00D9   ; [C] 1 byte(s). receiver flags
 ;   .0 RxInPacket     [C] receiver coroutine is waiting for a byte
 ;   .1 LowBatHold     [I] withhold low battery from replies
-;   .2 LowBatReported [I] low battery has been reported
+;   .2 LowBatReported [C] a reply has carried the low-battery bit
 ;   .3 RxIsData       [C] current packet is a data packet
 ;   .4 RxDataOk       [C] data packet accepted
 ;   .5 RxEndMark      [C] empty data packet received
@@ -99,7 +104,7 @@ RxFlags          equ $00D9   ; [C] 1 byte(s). receiver flags
 RxErrFlags       equ $00DA   ; [C] 1 byte(s). receiver error and control flags
 ;   .0 PacketError    [C] current packet broke a rule
 ;   .1 RxIgnored      [C] payload ignored (no command posted)
-;   .2 BlankLine      [I] column is blank
+;   .2 ColdHead       [C] every row heat is zero: use the cold tick curves
 ;   .3 DecCompressed  [C] decoder: packet is compressed
 ;   .4 SyncLostBusy   [C] sync lost while printing: treat packets as junk until the job ends
 ;   .5 BreakBlock     [C] after Break: data packets give a packet error until Init
@@ -125,31 +130,36 @@ JobFlags         equ $00E1   ; [C] 1 byte(s). print job flags
 ;   .1 Printing       [C] printing
 ;   .2 Feeding        [C] feeding paper
 ;   .3 BreakReq       [C] stop requested by Break
-;   .4 ReplyPending   [I] ?
-;   .5 BattCheckDue   [I] battery check under load pending
+;   .4 SioRearm       [C] serial watchdog armed: re-arm SIO2 after SioIdleTimer if no packet is in progress
+;   .5 BattCheckDue   [C] battery check under load (TC3) due
 ;   .6 InitDeferred   [I] init received during button feed
-;   .7 BattSample     [I] take a battery sample at the next strobe burst
+;   .7 BattSample     [C] first strobe burst of a job: read the battery under load (low battery at <= 0x7E, or a sag of 8 below BattAtStart when <= 0x9C)
 SlotBase         equ $00E2   ; [C] 2 byte(s). SRAM slot base (multiple of 0x280)
 SlotOffset       equ $00E4   ; [C] 2 byte(s). offset in the current 640-byte slot
 RleByte          equ $00E6   ; [C] 1 byte(s). RLE repeated byte
 RleCount         equ $00E7   ; [C] 1 byte(s). RLE run count
-LowBatTimer      equ $00E8   ; [I] 1 byte(s). low-battery reporting timer
+LowBatTimer      equ $00E8   ; [C] 1 byte(s). started at 0x6D when a reply carried low battery; counts ticks
 Copies           equ $00E9   ; [C] 1 byte(s). copies left (print argument byte 0)
 SavedSlotBase    equ $00EA   ; [C] 2 byte(s). rollback copy of SlotBase
 SavedImageBytes  equ $00EC   ; [C] 2 byte(s). rollback copy of ImageBytes
 SavedSlotOffset  equ $00EE   ; [C] 2 byte(s). rollback copy of SlotOffset
 RxSavedEIR       equ $00F0   ; [C] 2 byte(s). EIR saved by the receiver
+SioIdleTimer     equ $00F2   ; [C] 1 byte(s). ticks without serial activity before SIO2 is re-armed (JobFlags.SioRearm)
 EncoderTimeout   equ $00F3   ; [C] 1 byte(s). ticks without an encoder pulse (jam at overflow)
 CamTimeout       equ $00F4   ; [C] 1 byte(s). ticks without a cam sensor change (jam at overflow)
 SelfTest         equ $00F5   ; [C] 1 byte(s). 1 = self-test requested at power-on
-StartDelay       equ $00F6   ; [I] 1 byte(s). tick counter before a job starts
+StartDelay       equ $00F6   ; [C] 1 byte(s). delay before a job or the next copy: 0xF4 -> 0 (12 ticks)
 IdleDelay        equ $00F7   ; [I] 1 byte(s). tick counter before idle mode
-BandColumns      equ $00F8   ; [I] 1 byte(s). columns left in the band
+TileColumnsLeft  equ $00F8   ; [C] 1 byte(s). tile columns left in the band (20 per band)
+IdleCool         equ $00F9   ; [C] 1 byte(s). Tab_IdleCoolByTemp value for the current temperature
+DotMask          equ $00FA   ; [C] 2 byte(s). 16 bits: rows with a printed dot in this column
+BandIndex        equ $00FC   ; [C] 1 byte(s). band of the picture being printed (selects the tick curve)
 TempAdc          equ $00FD   ; [C] 1 byte(s). last temperature reading
 MechSubState     equ $00FE   ; [C] 1 byte(s). sub-state of the current mechanism state
 Palette          equ $00FF   ; [C] 1 byte(s). palette (print argument byte 2; 0 = no remapping)
-LineBuf          equ $0100   ; [I] 320 byte(s). image bytes fetched from SRAM for printing (32-byte chunks)
-ColumnSource     equ $0240   ; [I] 32 byte(s). bytes the current column is extracted from
+LineBuf          equ $0100   ; [C] 320 byte(s). image bytes fetched from SRAM for printing (32-byte chunks)
+ColumnSource     equ $0240   ; [C] 32 byte(s). 32 bytes of the tile column being printed (2 tiles x 16 rows x 2 planes)
+ColumnCodes      equ $0260   ; [C] 256 byte(s). energy codes: 16 rows per pixel column, one block of 16 per column state
 StrobeA_P0       equ $0360   ; [C] 35 byte(s). strobe tick table A for P0 (rows 0-7): one byte per TC1 tick
 StrobeA_P1       equ $0383   ; [C] 35 byte(s). strobe tick table A for P1 (rows 8-15)
 StrobeB_P0       equ $03A6   ; [C] 35 byte(s). strobe tick table B for P0
@@ -161,11 +171,11 @@ PktArgs          equ $03F0   ; [C] 4 byte(s). first 4 payload bytes of non-data 
 RingBuf          equ $03F4   ; [C] 32 byte(s). receive ring buffer (serial interrupt -> decoder)
 PktChecksum      equ $0414   ; [C] 2 byte(s). running checksum
 PktRemaining     equ $0416   ; [C] 2 byte(s). payload bytes left
-PowerOffTimer    equ $0418   ; [I] 1 byte(s). counted up in the idle mechanism state; on overflow P5.3 (power hold) is cleared
-HeatCurvePtr     equ $0419   ; [C] 2 byte(s). pointer to the heat-compensation curve (0xDB88 or 0xDC7B)
-BattAtStart      equ $041B   ; [I] 1 byte(s). battery reading at job start
+EncoderIdleCount equ $0418   ; [C] 1 byte(s). encoder pulses while idle with no job (from 0xE5); on overflow P5.3 is cleared
+HeatCurvePtr     equ $0419   ; [C] 2 byte(s). tick curve of the current band (from Tab_TickCurvePtrsWarm / Cold)
+BattAtStart      equ $041B   ; [C] 1 byte(s). battery reading (no load) at job start; compared with the reading under load
 ActivityTimer    equ $041C   ; [C] 1 byte(s). reloaded with 0xF3 by every received byte; idle reset when it wraps
-BlankColumns     equ $041E   ; [I] 1 byte(s). count of blank columns
+HeatSoak         equ $041E   ; [C] 1 byte(s). bands printed since the head was last cold (max 40); indexes Tab_TickTrimBySoak
 Sio2Buf          equ $0FF8   ; [C] 8 byte(s). SIO2 data buffer (shared transmit / receive)
 
         org $8000
@@ -209,7 +219,7 @@ L803B:
   805D  2cf79c     ld (IdleDelay),$9C
   8060  2cf601     ld (StartDelay),$01
   8063  2cf3f4     ld (EncoderTimeout),$F4
-  8066  171804     ld HL,PowerOffTimer
+  8066  171804     ld HL,EncoderIdleCount
   8069  2de5       ld (HL),$E5
   806B  fc85dd     call Boot_SramTest
   806E  24106400   ldw (TREG1A),$0064
@@ -234,7 +244,7 @@ L803B:
   80A5  fcaddd     call SelfTest_Load
 
 Boot_SettleDelay:
-; [I] busy-wait before the first battery reading
+; [C] 65,536-step busy-wait before the first battery reading
   80A8  140000     ld WA,$0000
 L80AB:
   80AB  10         inc WA
@@ -276,7 +286,7 @@ L80E0:
 L80E4:
   80E4  d87c       test (Status).0   ; StLowBattery
   80E6  85         jrs T,L80ED
-  80E7  de71       test (SysFlags).6   ; LowBatSeen
+  80E7  de71       test (SysFlags).6   ; SupplyCut
   80E9  a2         jrs F,L80ED
   80EA  febb82     jp Main_Wake
 L80ED:
@@ -338,29 +348,31 @@ Main_EnterIdle:
   8151  feb682     jp Main_CheckTempBattery
 L8154:
   8154  dfe1       test (JobFlags).7   ; BattSample
-  8156  82         jrs T,L815A
+  8156  82         jrs T,Heat_DecayIdle
   8157  feb682     jp Main_CheckTempBattery
-L815A:
+
+Heat_DecayIdle:
+; [C] per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
   815A  2c0e00     ld (ADCCR),$00
   815D  460e       set (ADCCR).6
 L815F:
   815F  df0e       test (ADCCR).7
   8161  9c         jrs T,L815F
   8162  e00f5a     ld C,(ADCDR)
-  8165  1476da     ld WA,Tab_DA76
+  8165  1476da     ld WA,Tab_DecayByTemp
   8168  3300       ld B,$00
   816A  e931       add WA,BC
   816C  e817       ld HL,WA
   816E  e35a       ld C,(HL)
   8170  ea5d       ld D,C
-  8172  e0b75c     ld E,($B7)
+  8172  e0b75c     ld E,(RowHeat)
   8175  ea02       mul DE
   8177  ea59       ld W,C
   8179  22b8       ld A,($B8)
   817B  02         mul W,A
   817C  ed61       add A,D
   817E  e97000     addc W,$00
-  8181  f0b710     ld ($B7),WA
+  8181  f0b710     ld (RowHeat),WA
   8184  ea5d       ld D,C
   8186  e0b95c     ld E,($B9)
   8189  ea02       mul DE
@@ -496,20 +508,20 @@ L815F:
   82A8  ed61       add A,D
   82AA  e97000     addc W,$00
   82AD  f0d510     ld ($D5),WA
-  82B0  171e04     ld HL,BlankColumns
+  82B0  171e04     ld HL,HeatSoak
   82B3  29         dec (HL)
   82B4  a0         jrs F,Main_CheckTempBattery
   82B5  2f         clr (HL)
 
 Main_CheckTempBattery:
-; [I]
+; [C] periodic temperature and battery check (Sub_CheckTempBattery)
   82B6  fc09a4     call Sub_CheckTempBattery
   82B9  fb15       jr Main_Tick
 
 Main_Wake:
-; [I] back from idle: normal tick
+; [C] back from idle: clear SysFlags.Idle, reload EncoderIdleCount
   82BB  4f71       clr (SysFlags).7   ; Idle
-  82BD  171804     ld HL,PowerOffTimer
+  82BD  171804     ld HL,EncoderIdleCount
   82C0  2de5       ld (HL),$E5
   82C2  e0737700   cmp (MechState),$00
   82C6  85         jrs T,L82CD
@@ -558,33 +570,33 @@ L8300:
   8313  f0dc13     ld (RingWr),HL
   8316  f0de13     ld (RingRd),HL
 L8319:
-  8319  22f2       ld A,($F2)
+  8319  22f2       ld A,(SioIdleTimer)
   831B  d002       jr Z,L831F
-  831D  20f2       inc ($F2)
+  831D  20f2       inc (SioIdleTimer)
 L831F:
-  831F  dce1       test (JobFlags).4   ; ReplyPending
+  831F  dce1       test (JobFlags).4   ; SioRearm
   8321  d713       jr F,L8336
-  8323  22f2       ld A,($F2)
+  8323  22f2       ld A,(SioIdleTimer)
   8325  d124       jr NZ,L834B
-  8327  2cf2f4     ld ($F2),$F4
+  8327  2cf2f4     ld (SioIdleTimer),$F4
   832A  d8d9       test (RxFlags).0   ; RxInPacket
   832C  d71b       jr F,L8349
   832E  de22       test (SIO2CR1).6
   8330  d617       jr T,L8349
-  8332  44e1       set (JobFlags).4   ; ReplyPending
+  8332  44e1       set (JobFlags).4   ; SioRearm
   8334  fb15       jr L834B
 L8336:
   8336  d8d9       test (RxFlags).0   ; RxInPacket
   8338  af         jrs F,L8349
   8339  de22       test (SIO2CR1).6
   833B  8c         jrs T,L8349
-  833C  22f2       ld A,($F2)
+  833C  22f2       ld A,(SioIdleTimer)
   833E  d10b       jr NZ,L834B
   8340  2c2267     ld (SIO2CR1),$67
   8343  2c2300     ld (SIO2CR2),$00
   8346  2c22a7     ld (SIO2CR1),$A7
 L8349:
-  8349  4ce1       clr (JobFlags).4   ; ReplyPending
+  8349  4ce1       clr (JobFlags).4   ; SioRearm
 L834B:
   834B  2273       ld A,(MechState)
   834D  d109       jr NZ,L8358
@@ -611,7 +623,7 @@ L8360:
   8377  4e7c       clr (Status).6   ; StBusy
 
 Main_StartDelay:
-; [I]
+; [C] counts StartDelay (12 ticks, about 123 ms) before a job or the next copy starts
   8379  e0f67701   cmp (StartDelay),$01
   837D  85         jrs T,L8384
   837E  22f6       ld A,(StartDelay)
@@ -639,32 +651,34 @@ L839F:
   83A1  82         jrs T,L83A5
   83A2  fe0885     jp L8508
 L83A5:
-  83A5  171e04     ld HL,BlankColumns
+  83A5  171e04     ld HL,HeatSoak
   83A8  2f         clr (HL)
   83A9  dfe1       test (JobFlags).7   ; BattSample
-  83AB  82         jrs T,L83AF
+  83AB  82         jrs T,Heat_DecayTick
   83AC  fe0585     jp Main_LowBattery
-L83AF:
+
+Heat_DecayTick:
+; [C] per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
   83AF  2c0e00     ld (ADCCR),$00
   83B2  460e       set (ADCCR).6
 L83B4:
   83B4  df0e       test (ADCCR).7
   83B6  9c         jrs T,L83B4
   83B7  e00f5a     ld C,(ADCDR)
-  83BA  1476da     ld WA,Tab_DA76
+  83BA  1476da     ld WA,Tab_DecayByTemp
   83BD  3300       ld B,$00
   83BF  e931       add WA,BC
   83C1  e817       ld HL,WA
   83C3  e35a       ld C,(HL)
   83C5  ea5d       ld D,C
-  83C7  e0b75c     ld E,($B7)
+  83C7  e0b75c     ld E,(RowHeat)
   83CA  ea02       mul DE
   83CC  ea59       ld W,C
   83CE  22b8       ld A,($B8)
   83D0  02         mul W,A
   83D1  ed61       add A,D
   83D3  e97000     addc W,$00
-  83D6  f0b710     ld ($B7),WA
+  83D6  f0b710     ld (RowHeat),WA
   83D9  ea5d       ld D,C
   83DB  e0b95c     ld E,($B9)
   83DE  ea02       mul DE
@@ -802,7 +816,7 @@ L83B4:
   8502  f0d510     ld ($D5),WA
 
 Main_LowBattery:
-; [I] low battery reported and its timer expired: clears P5.3 (power hold)
+; [C] after low battery: once reported (and LowBatTimer expired) or held while idle, clear P5.3
   8505  2cf79c     ld (IdleDelay),$9C
 L8508:
   8508  d87c       test (Status).0   ; StLowBattery
@@ -823,7 +837,7 @@ L8520:
   8520  e0e87700   cmp (LowBatTimer),$00
   8524  a3         jrs F,Main_CamWatchdog
 L8525:
-  8525  4671       set (SysFlags).6   ; LowBatSeen
+  8525  4671       set (SysFlags).6   ; SupplyCut
   8527  4b05       clr (P5).3
 
 Main_CamWatchdog:
@@ -1139,19 +1153,19 @@ Job_SetHeatTime:
   8727  2a79       ld (HeatBase),A
   8729  797a       add A,(ExposureOffset)
   872B  2a78       ld (HeatTime),A
-  872D  1476d0     ld WA,Tab_ParamByTemp
+  872D  1476d0     ld WA,Tab_IdleCoolByTemp
   8730  3300       ld B,$00
   8732  e931       add WA,BC
   8734  e817       ld HL,WA
-  8736  e326f9     ld ($F9),(HL)
+  8736  e326f9     ld (IdleCool),(HL)
   8739  41e1       set (JobFlags).1   ; Printing
   873B  4c70       clr (MechFlags).4   ; StrobeBufB
   873D  4670       set (MechFlags).6   ; LineBufFill
   873F  24740001   ldw (LineBufWr),$0100
   8743  24760001   ldw (LineBufRd),$0100
   8747  24830000   ldw (PrintReadPos),$0000
-  874B  2cf813     ld (BandColumns),$13
-  874E  2ea7       clr ($A7)
+  874B  2cf813     ld (TileColumnsLeft),$13
+  874E  2ea7       clr (RowHistory)
   8750  2ea8       clr ($A8)
   8752  2ea9       clr ($A9)
   8754  2eaa       clr ($AA)
@@ -1167,7 +1181,7 @@ Job_SetHeatTime:
   8768  2eb4       clr ($B4)
   876A  2eb5       clr ($B5)
   876C  2eb6       clr ($B6)
-  876E  26b860     ld (ColumnDots),($B8)
+  876E  26b860     ld (RowHeatInt),($B8)
   8771  26ba61     ld ($61),($BA)
   8774  26bc62     ld ($62),($BC)
   8777  26be63     ld ($63),($BE)
@@ -1183,9 +1197,9 @@ Job_SetHeatTime:
   8795  26d26d     ld ($6D),($D2)
   8798  26d46e     ld ($6E),($D4)
   879B  26d66f     ld ($6F),($D6)
-  879E  2efc       clr ($FC)
+  879E  2efc       clr (BandIndex)
   87A0  171904     ld HL,HeatCurvePtr
-  87A3  2260       ld A,(ColumnDots)
+  87A3  2260       ld A,(RowHeatInt)
   87A5  d146       jr NZ,L87ED
   87A7  2261       ld A,($61)
   87A9  d142       jr NZ,L87ED
@@ -1218,14 +1232,14 @@ Job_SetHeatTime:
   87DF  226f       ld A,($6F)
   87E1  d10a       jr NZ,L87ED
   87E3  257bdc     ldw (HL),$DC7B
-  87E6  42da       set (RxErrFlags).2   ; BlankLine
-  87E8  171e04     ld HL,BlankColumns
+  87E6  42da       set (RxErrFlags).2   ; ColdHead
+  87E8  171e04     ld HL,HeatSoak
   87EB  2f         clr (HL)
   87EC  8f         jrs T,L87FD
 L87ED:
   87ED  2588db     ldw (HL),$DB88
-  87F0  4ada       clr (RxErrFlags).2   ; BlankLine
-  87F2  171e04     ld HL,BlankColumns
+  87F0  4ada       clr (RxErrFlags).2   ; ColdHead
+  87F2  171e04     ld HL,HeatSoak
   87F5  21         inc (HL)
   87F6  e37728     cmp (HL),$28
   87F9  d402       jr LE,L87FD
@@ -1234,42 +1248,42 @@ L87FD:
   87FD  fc5ea4     call Sub_PrimeLineBuf
   8800  e07616     ld DE,(LineBufRd)
   8803  fcc2b9     call Line_CopyColumnSource
-  8806  2e82       clr ($82)
+  8806  2e82       clr (TileColumnX)
 
-Line_PrepareBand:
-; [I] extract and convert the next column for the strobe tables
+Line_FirstColumn:
+; [C] job start: extract, history, energy codes and heat accumulation for the first column
   8808  fc51ba     call Line_ExtractColumn
-  880B  fc39bb     call Line_ColumnDots
-  880E  166002     ld DE,$0260
-  8811  fcedbb     call Line_ColumnHeat
-  8814  166002     ld DE,$0260
-  8817  2282       ld A,($82)
+  880B  fc39bb     call Line_ColumnHistory
+  880E  166002     ld DE,ColumnCodes
+  8811  fcedbb     call Line_ColumnEnergy
+  8814  166002     ld DE,ColumnCodes
+  8817  2282       ld A,(TileColumnX)
   8819  01         swap A
   881A  3100       ld W,$00
   881C  ea31       add WA,DE
   881E  e817       ld HL,WA
   8820  e35a       ld C,(HL)
-  8822  1776d1     ld HL,Tab_D176
+  8822  1776d1     ld HL,Tab_HeatAddByCode
   8825  e558       ld A,(HL+C)
   8827  d021       jr Z,L884A
-  8829  40fa       set ($FA).0
+  8829  40fa       set (DotMask).0
   882B  d71f       jr F,L884C
-  882D  e0a77703   cmp ($A7),$03
+  882D  e0a77703   cmp (RowHistory),$03
   8831  d519       jr GT,L884C
   8833  e0fd5a     ld C,(TempAdc)
   8836  3300       ld B,$00
   8838  ea1c       shlc C
   883A  eb1e       rolc B
-  883C  1476d2     ld WA,Tab_D276
+  883C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   883F  e931       add WA,BC
   8841  e817       ld HL,WA
   8843  e314       ld WA,(HL)
-  8845  e0b717     ld HL,($B7)
+  8845  e0b717     ld HL,(RowHeat)
   8848  fb13       jr L885D
 L884A:
-  884A  22f9       ld A,($F9)
+  884A  22f9       ld A,(IdleCool)
 L884C:
-  884C  e0b717     ld HL,($B7)
+  884C  e0b717     ld HL,(RowHeat)
   884F  e8df       test A.7
   8851  88         jrs T,L885B
   8852  31ff       ld W,$FF
@@ -1284,18 +1298,18 @@ L885D:
   885F  a2         jrs F,L8863
   8860  14ffff     ld WA,$FFFF
 L8863:
-  8863  f0b710     ld ($B7),WA
+  8863  f0b710     ld (RowHeat),WA
   8866  12         inc DE
-  8867  2282       ld A,($82)
+  8867  2282       ld A,(TileColumnX)
   8869  01         swap A
   886A  3100       ld W,$00
   886C  ea31       add WA,DE
   886E  e817       ld HL,WA
   8870  e35a       ld C,(HL)
-  8872  1776d1     ld HL,Tab_D176
+  8872  1776d1     ld HL,Tab_HeatAddByCode
   8875  e558       ld A,(HL+C)
   8877  d021       jr Z,L889A
-  8879  41fa       set ($FA).1
+  8879  41fa       set (DotMask).1
   887B  d71f       jr F,L889C
   887D  e0a87703   cmp ($A8),$03
   8881  d519       jr GT,L889C
@@ -1303,14 +1317,14 @@ L8863:
   8886  3300       ld B,$00
   8888  ea1c       shlc C
   888A  eb1e       rolc B
-  888C  1476d2     ld WA,Tab_D276
+  888C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   888F  e931       add WA,BC
   8891  e817       ld HL,WA
   8893  e314       ld WA,(HL)
   8895  e0b917     ld HL,($B9)
   8898  fb13       jr L88AD
 L889A:
-  889A  22f9       ld A,($F9)
+  889A  22f9       ld A,(IdleCool)
 L889C:
   889C  e0b917     ld HL,($B9)
   889F  e8df       test A.7
@@ -1329,16 +1343,16 @@ L88AD:
 L88B3:
   88B3  f0b910     ld ($B9),WA
   88B6  12         inc DE
-  88B7  2282       ld A,($82)
+  88B7  2282       ld A,(TileColumnX)
   88B9  01         swap A
   88BA  3100       ld W,$00
   88BC  ea31       add WA,DE
   88BE  e817       ld HL,WA
   88C0  e35a       ld C,(HL)
-  88C2  1776d1     ld HL,Tab_D176
+  88C2  1776d1     ld HL,Tab_HeatAddByCode
   88C5  e558       ld A,(HL+C)
   88C7  d021       jr Z,L88EA
-  88C9  42fa       set ($FA).2
+  88C9  42fa       set (DotMask).2
   88CB  d71f       jr F,L88EC
   88CD  e0a97703   cmp ($A9),$03
   88D1  d519       jr GT,L88EC
@@ -1346,14 +1360,14 @@ L88B3:
   88D6  3300       ld B,$00
   88D8  ea1c       shlc C
   88DA  eb1e       rolc B
-  88DC  1476d2     ld WA,Tab_D276
+  88DC  1476d2     ld WA,Tab_HeatAddFreshByTemp
   88DF  e931       add WA,BC
   88E1  e817       ld HL,WA
   88E3  e314       ld WA,(HL)
   88E5  e0bb17     ld HL,($BB)
   88E8  fb13       jr L88FD
 L88EA:
-  88EA  22f9       ld A,($F9)
+  88EA  22f9       ld A,(IdleCool)
 L88EC:
   88EC  e0bb17     ld HL,($BB)
   88EF  e8df       test A.7
@@ -1372,16 +1386,16 @@ L88FD:
 L8903:
   8903  f0bb10     ld ($BB),WA
   8906  12         inc DE
-  8907  2282       ld A,($82)
+  8907  2282       ld A,(TileColumnX)
   8909  01         swap A
   890A  3100       ld W,$00
   890C  ea31       add WA,DE
   890E  e817       ld HL,WA
   8910  e35a       ld C,(HL)
-  8912  1776d1     ld HL,Tab_D176
+  8912  1776d1     ld HL,Tab_HeatAddByCode
   8915  e558       ld A,(HL+C)
   8917  d021       jr Z,L893A
-  8919  43fa       set ($FA).3
+  8919  43fa       set (DotMask).3
   891B  d71f       jr F,L893C
   891D  e0aa7703   cmp ($AA),$03
   8921  d519       jr GT,L893C
@@ -1389,14 +1403,14 @@ L8903:
   8926  3300       ld B,$00
   8928  ea1c       shlc C
   892A  eb1e       rolc B
-  892C  1476d2     ld WA,Tab_D276
+  892C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   892F  e931       add WA,BC
   8931  e817       ld HL,WA
   8933  e314       ld WA,(HL)
   8935  e0bd17     ld HL,($BD)
   8938  fb13       jr L894D
 L893A:
-  893A  22f9       ld A,($F9)
+  893A  22f9       ld A,(IdleCool)
 L893C:
   893C  e0bd17     ld HL,($BD)
   893F  e8df       test A.7
@@ -1415,16 +1429,16 @@ L894D:
 L8953:
   8953  f0bd10     ld ($BD),WA
   8956  12         inc DE
-  8957  2282       ld A,($82)
+  8957  2282       ld A,(TileColumnX)
   8959  01         swap A
   895A  3100       ld W,$00
   895C  ea31       add WA,DE
   895E  e817       ld HL,WA
   8960  e35a       ld C,(HL)
-  8962  1776d1     ld HL,Tab_D176
+  8962  1776d1     ld HL,Tab_HeatAddByCode
   8965  e558       ld A,(HL+C)
   8967  d021       jr Z,L898A
-  8969  44fa       set ($FA).4
+  8969  44fa       set (DotMask).4
   896B  d71f       jr F,L898C
   896D  e0ab7703   cmp ($AB),$03
   8971  d519       jr GT,L898C
@@ -1432,14 +1446,14 @@ L8953:
   8976  3300       ld B,$00
   8978  ea1c       shlc C
   897A  eb1e       rolc B
-  897C  1476d2     ld WA,Tab_D276
+  897C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   897F  e931       add WA,BC
   8981  e817       ld HL,WA
   8983  e314       ld WA,(HL)
   8985  e0bf17     ld HL,($BF)
   8988  fb13       jr L899D
 L898A:
-  898A  22f9       ld A,($F9)
+  898A  22f9       ld A,(IdleCool)
 L898C:
   898C  e0bf17     ld HL,($BF)
   898F  e8df       test A.7
@@ -1458,16 +1472,16 @@ L899D:
 L89A3:
   89A3  f0bf10     ld ($BF),WA
   89A6  12         inc DE
-  89A7  2282       ld A,($82)
+  89A7  2282       ld A,(TileColumnX)
   89A9  01         swap A
   89AA  3100       ld W,$00
   89AC  ea31       add WA,DE
   89AE  e817       ld HL,WA
   89B0  e35a       ld C,(HL)
-  89B2  1776d1     ld HL,Tab_D176
+  89B2  1776d1     ld HL,Tab_HeatAddByCode
   89B5  e558       ld A,(HL+C)
   89B7  d021       jr Z,L89DA
-  89B9  45fa       set ($FA).5
+  89B9  45fa       set (DotMask).5
   89BB  d71f       jr F,L89DC
   89BD  e0ac7703   cmp ($AC),$03
   89C1  d519       jr GT,L89DC
@@ -1475,14 +1489,14 @@ L89A3:
   89C6  3300       ld B,$00
   89C8  ea1c       shlc C
   89CA  eb1e       rolc B
-  89CC  1476d2     ld WA,Tab_D276
+  89CC  1476d2     ld WA,Tab_HeatAddFreshByTemp
   89CF  e931       add WA,BC
   89D1  e817       ld HL,WA
   89D3  e314       ld WA,(HL)
   89D5  e0c117     ld HL,($C1)
   89D8  fb13       jr L89ED
 L89DA:
-  89DA  22f9       ld A,($F9)
+  89DA  22f9       ld A,(IdleCool)
 L89DC:
   89DC  e0c117     ld HL,($C1)
   89DF  e8df       test A.7
@@ -1501,16 +1515,16 @@ L89ED:
 L89F3:
   89F3  f0c110     ld ($C1),WA
   89F6  12         inc DE
-  89F7  2282       ld A,($82)
+  89F7  2282       ld A,(TileColumnX)
   89F9  01         swap A
   89FA  3100       ld W,$00
   89FC  ea31       add WA,DE
   89FE  e817       ld HL,WA
   8A00  e35a       ld C,(HL)
-  8A02  1776d1     ld HL,Tab_D176
+  8A02  1776d1     ld HL,Tab_HeatAddByCode
   8A05  e558       ld A,(HL+C)
   8A07  d021       jr Z,L8A2A
-  8A09  46fa       set ($FA).6
+  8A09  46fa       set (DotMask).6
   8A0B  d71f       jr F,L8A2C
   8A0D  e0ad7703   cmp ($AD),$03
   8A11  d519       jr GT,L8A2C
@@ -1518,14 +1532,14 @@ L89F3:
   8A16  3300       ld B,$00
   8A18  ea1c       shlc C
   8A1A  eb1e       rolc B
-  8A1C  1476d2     ld WA,Tab_D276
+  8A1C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8A1F  e931       add WA,BC
   8A21  e817       ld HL,WA
   8A23  e314       ld WA,(HL)
   8A25  e0c317     ld HL,($C3)
   8A28  fb13       jr L8A3D
 L8A2A:
-  8A2A  22f9       ld A,($F9)
+  8A2A  22f9       ld A,(IdleCool)
 L8A2C:
   8A2C  e0c317     ld HL,($C3)
   8A2F  e8df       test A.7
@@ -1544,16 +1558,16 @@ L8A3D:
 L8A43:
   8A43  f0c310     ld ($C3),WA
   8A46  12         inc DE
-  8A47  2282       ld A,($82)
+  8A47  2282       ld A,(TileColumnX)
   8A49  01         swap A
   8A4A  3100       ld W,$00
   8A4C  ea31       add WA,DE
   8A4E  e817       ld HL,WA
   8A50  e35a       ld C,(HL)
-  8A52  1776d1     ld HL,Tab_D176
+  8A52  1776d1     ld HL,Tab_HeatAddByCode
   8A55  e558       ld A,(HL+C)
   8A57  d021       jr Z,L8A7A
-  8A59  47fa       set ($FA).7
+  8A59  47fa       set (DotMask).7
   8A5B  d71f       jr F,L8A7C
   8A5D  e0ae7703   cmp ($AE),$03
   8A61  d519       jr GT,L8A7C
@@ -1561,14 +1575,14 @@ L8A43:
   8A66  3300       ld B,$00
   8A68  ea1c       shlc C
   8A6A  eb1e       rolc B
-  8A6C  1476d2     ld WA,Tab_D276
+  8A6C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8A6F  e931       add WA,BC
   8A71  e817       ld HL,WA
   8A73  e314       ld WA,(HL)
   8A75  e0c517     ld HL,($C5)
   8A78  fb13       jr L8A8D
 L8A7A:
-  8A7A  22f9       ld A,($F9)
+  8A7A  22f9       ld A,(IdleCool)
 L8A7C:
   8A7C  e0c517     ld HL,($C5)
   8A7F  e8df       test A.7
@@ -1587,13 +1601,13 @@ L8A8D:
 L8A93:
   8A93  f0c510     ld ($C5),WA
   8A96  12         inc DE
-  8A97  2282       ld A,($82)
+  8A97  2282       ld A,(TileColumnX)
   8A99  01         swap A
   8A9A  3100       ld W,$00
   8A9C  ea31       add WA,DE
   8A9E  e817       ld HL,WA
   8AA0  e35a       ld C,(HL)
-  8AA2  1776d1     ld HL,Tab_D176
+  8AA2  1776d1     ld HL,Tab_HeatAddByCode
   8AA5  e558       ld A,(HL+C)
   8AA7  d021       jr Z,L8ACA
   8AA9  40fb       set ($FB).0
@@ -1604,14 +1618,14 @@ L8A93:
   8AB6  3300       ld B,$00
   8AB8  ea1c       shlc C
   8ABA  eb1e       rolc B
-  8ABC  1476d2     ld WA,Tab_D276
+  8ABC  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8ABF  e931       add WA,BC
   8AC1  e817       ld HL,WA
   8AC3  e314       ld WA,(HL)
   8AC5  e0c717     ld HL,($C7)
   8AC8  fb13       jr L8ADD
 L8ACA:
-  8ACA  22f9       ld A,($F9)
+  8ACA  22f9       ld A,(IdleCool)
 L8ACC:
   8ACC  e0c717     ld HL,($C7)
   8ACF  e8df       test A.7
@@ -1630,13 +1644,13 @@ L8ADD:
 L8AE3:
   8AE3  f0c710     ld ($C7),WA
   8AE6  12         inc DE
-  8AE7  2282       ld A,($82)
+  8AE7  2282       ld A,(TileColumnX)
   8AE9  01         swap A
   8AEA  3100       ld W,$00
   8AEC  ea31       add WA,DE
   8AEE  e817       ld HL,WA
   8AF0  e35a       ld C,(HL)
-  8AF2  1776d1     ld HL,Tab_D176
+  8AF2  1776d1     ld HL,Tab_HeatAddByCode
   8AF5  e558       ld A,(HL+C)
   8AF7  d021       jr Z,L8B1A
   8AF9  41fb       set ($FB).1
@@ -1647,14 +1661,14 @@ L8AE3:
   8B06  3300       ld B,$00
   8B08  ea1c       shlc C
   8B0A  eb1e       rolc B
-  8B0C  1476d2     ld WA,Tab_D276
+  8B0C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8B0F  e931       add WA,BC
   8B11  e817       ld HL,WA
   8B13  e314       ld WA,(HL)
   8B15  e0c917     ld HL,($C9)
   8B18  fb13       jr L8B2D
 L8B1A:
-  8B1A  22f9       ld A,($F9)
+  8B1A  22f9       ld A,(IdleCool)
 L8B1C:
   8B1C  e0c917     ld HL,($C9)
   8B1F  e8df       test A.7
@@ -1673,13 +1687,13 @@ L8B2D:
 L8B33:
   8B33  f0c910     ld ($C9),WA
   8B36  12         inc DE
-  8B37  2282       ld A,($82)
+  8B37  2282       ld A,(TileColumnX)
   8B39  01         swap A
   8B3A  3100       ld W,$00
   8B3C  ea31       add WA,DE
   8B3E  e817       ld HL,WA
   8B40  e35a       ld C,(HL)
-  8B42  1776d1     ld HL,Tab_D176
+  8B42  1776d1     ld HL,Tab_HeatAddByCode
   8B45  e558       ld A,(HL+C)
   8B47  d021       jr Z,L8B6A
   8B49  42fb       set ($FB).2
@@ -1690,14 +1704,14 @@ L8B33:
   8B56  3300       ld B,$00
   8B58  ea1c       shlc C
   8B5A  eb1e       rolc B
-  8B5C  1476d2     ld WA,Tab_D276
+  8B5C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8B5F  e931       add WA,BC
   8B61  e817       ld HL,WA
   8B63  e314       ld WA,(HL)
   8B65  e0cb17     ld HL,($CB)
   8B68  fb13       jr L8B7D
 L8B6A:
-  8B6A  22f9       ld A,($F9)
+  8B6A  22f9       ld A,(IdleCool)
 L8B6C:
   8B6C  e0cb17     ld HL,($CB)
   8B6F  e8df       test A.7
@@ -1716,13 +1730,13 @@ L8B7D:
 L8B83:
   8B83  f0cb10     ld ($CB),WA
   8B86  12         inc DE
-  8B87  2282       ld A,($82)
+  8B87  2282       ld A,(TileColumnX)
   8B89  01         swap A
   8B8A  3100       ld W,$00
   8B8C  ea31       add WA,DE
   8B8E  e817       ld HL,WA
   8B90  e35a       ld C,(HL)
-  8B92  1776d1     ld HL,Tab_D176
+  8B92  1776d1     ld HL,Tab_HeatAddByCode
   8B95  e558       ld A,(HL+C)
   8B97  d021       jr Z,L8BBA
   8B99  43fb       set ($FB).3
@@ -1733,14 +1747,14 @@ L8B83:
   8BA6  3300       ld B,$00
   8BA8  ea1c       shlc C
   8BAA  eb1e       rolc B
-  8BAC  1476d2     ld WA,Tab_D276
+  8BAC  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8BAF  e931       add WA,BC
   8BB1  e817       ld HL,WA
   8BB3  e314       ld WA,(HL)
   8BB5  e0cd17     ld HL,($CD)
   8BB8  fb13       jr L8BCD
 L8BBA:
-  8BBA  22f9       ld A,($F9)
+  8BBA  22f9       ld A,(IdleCool)
 L8BBC:
   8BBC  e0cd17     ld HL,($CD)
   8BBF  e8df       test A.7
@@ -1759,13 +1773,13 @@ L8BCD:
 L8BD3:
   8BD3  f0cd10     ld ($CD),WA
   8BD6  12         inc DE
-  8BD7  2282       ld A,($82)
+  8BD7  2282       ld A,(TileColumnX)
   8BD9  01         swap A
   8BDA  3100       ld W,$00
   8BDC  ea31       add WA,DE
   8BDE  e817       ld HL,WA
   8BE0  e35a       ld C,(HL)
-  8BE2  1776d1     ld HL,Tab_D176
+  8BE2  1776d1     ld HL,Tab_HeatAddByCode
   8BE5  e558       ld A,(HL+C)
   8BE7  d021       jr Z,L8C0A
   8BE9  44fb       set ($FB).4
@@ -1776,14 +1790,14 @@ L8BD3:
   8BF6  3300       ld B,$00
   8BF8  ea1c       shlc C
   8BFA  eb1e       rolc B
-  8BFC  1476d2     ld WA,Tab_D276
+  8BFC  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8BFF  e931       add WA,BC
   8C01  e817       ld HL,WA
   8C03  e314       ld WA,(HL)
   8C05  e0cf17     ld HL,($CF)
   8C08  fb13       jr L8C1D
 L8C0A:
-  8C0A  22f9       ld A,($F9)
+  8C0A  22f9       ld A,(IdleCool)
 L8C0C:
   8C0C  e0cf17     ld HL,($CF)
   8C0F  e8df       test A.7
@@ -1802,13 +1816,13 @@ L8C1D:
 L8C23:
   8C23  f0cf10     ld ($CF),WA
   8C26  12         inc DE
-  8C27  2282       ld A,($82)
+  8C27  2282       ld A,(TileColumnX)
   8C29  01         swap A
   8C2A  3100       ld W,$00
   8C2C  ea31       add WA,DE
   8C2E  e817       ld HL,WA
   8C30  e35a       ld C,(HL)
-  8C32  1776d1     ld HL,Tab_D176
+  8C32  1776d1     ld HL,Tab_HeatAddByCode
   8C35  e558       ld A,(HL+C)
   8C37  d021       jr Z,L8C5A
   8C39  45fb       set ($FB).5
@@ -1819,14 +1833,14 @@ L8C23:
   8C46  3300       ld B,$00
   8C48  ea1c       shlc C
   8C4A  eb1e       rolc B
-  8C4C  1476d2     ld WA,Tab_D276
+  8C4C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8C4F  e931       add WA,BC
   8C51  e817       ld HL,WA
   8C53  e314       ld WA,(HL)
   8C55  e0d117     ld HL,($D1)
   8C58  fb13       jr L8C6D
 L8C5A:
-  8C5A  22f9       ld A,($F9)
+  8C5A  22f9       ld A,(IdleCool)
 L8C5C:
   8C5C  e0d117     ld HL,($D1)
   8C5F  e8df       test A.7
@@ -1845,13 +1859,13 @@ L8C6D:
 L8C73:
   8C73  f0d110     ld ($D1),WA
   8C76  12         inc DE
-  8C77  2282       ld A,($82)
+  8C77  2282       ld A,(TileColumnX)
   8C79  01         swap A
   8C7A  3100       ld W,$00
   8C7C  ea31       add WA,DE
   8C7E  e817       ld HL,WA
   8C80  e35a       ld C,(HL)
-  8C82  1776d1     ld HL,Tab_D176
+  8C82  1776d1     ld HL,Tab_HeatAddByCode
   8C85  e558       ld A,(HL+C)
   8C87  d021       jr Z,L8CAA
   8C89  46fb       set ($FB).6
@@ -1862,14 +1876,14 @@ L8C73:
   8C96  3300       ld B,$00
   8C98  ea1c       shlc C
   8C9A  eb1e       rolc B
-  8C9C  1476d2     ld WA,Tab_D276
+  8C9C  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8C9F  e931       add WA,BC
   8CA1  e817       ld HL,WA
   8CA3  e314       ld WA,(HL)
   8CA5  e0d317     ld HL,($D3)
   8CA8  fb13       jr L8CBD
 L8CAA:
-  8CAA  22f9       ld A,($F9)
+  8CAA  22f9       ld A,(IdleCool)
 L8CAC:
   8CAC  e0d317     ld HL,($D3)
   8CAF  e8df       test A.7
@@ -1888,13 +1902,13 @@ L8CBD:
 L8CC3:
   8CC3  f0d310     ld ($D3),WA
   8CC6  12         inc DE
-  8CC7  2282       ld A,($82)
+  8CC7  2282       ld A,(TileColumnX)
   8CC9  01         swap A
   8CCA  3100       ld W,$00
   8CCC  ea31       add WA,DE
   8CCE  e817       ld HL,WA
   8CD0  e35a       ld C,(HL)
-  8CD2  1776d1     ld HL,Tab_D176
+  8CD2  1776d1     ld HL,Tab_HeatAddByCode
   8CD5  e558       ld A,(HL+C)
   8CD7  d021       jr Z,L8CFA
   8CD9  47fb       set ($FB).7
@@ -1905,14 +1919,14 @@ L8CC3:
   8CE6  3300       ld B,$00
   8CE8  ea1c       shlc C
   8CEA  eb1e       rolc B
-  8CEC  1476d2     ld WA,Tab_D276
+  8CEC  1476d2     ld WA,Tab_HeatAddFreshByTemp
   8CEF  e931       add WA,BC
   8CF1  e817       ld HL,WA
   8CF3  e314       ld WA,(HL)
   8CF5  e0d517     ld HL,($D5)
   8CF8  fb13       jr L8D0D
 L8CFA:
-  8CFA  22f9       ld A,($F9)
+  8CFA  22f9       ld A,(IdleCool)
 L8CFC:
   8CFC  e0d517     ld HL,($D5)
   8CFF  e8df       test A.7
@@ -1930,12 +1944,12 @@ L8D0D:
   8D10  14ffff     ld WA,$FFFF
 L8D13:
   8D13  f0d510     ld ($D5),WA
-  8D16  2082       inc ($82)
-  8D18  e0827708   cmp ($82),$08
+  8D16  2082       inc (TileColumnX)
+  8D18  e0827708   cmp (TileColumnX),$08
   8D1C  d303       jr CC,L8D21
-  8D1E  fe0888     jp Line_PrepareBand
+  8D1E  fe0888     jp Line_FirstColumn
 L8D21:
-  8D21  166002     ld DE,$0260
+  8D21  166002     ld DE,ColumnCodes
   8D24  fcbebe     call StrobeA_Row00
   8D27  fc1dbf     call StrobeA_Row01
   8D2A  fc7cbf     call StrobeA_Row02
@@ -1973,7 +1987,7 @@ L8D6F:
   8D78  467c       set (Status).6   ; StBusy
 
 Main_LinePipeline:
-; [I] line buffer refill / column preparation scheduling
+; [C] between bursts: refill LineBuf from SRAM when empty, else copy the next tile column and prepare the next column
   8D7A  e07414     ld WA,(LineBufWr)
   8D7D  e07616     ld DE,(LineBufRd)
   8D80  ea37       cmp WA,DE
@@ -2085,14 +2099,14 @@ L8D8C:
   8E14  160001     ld DE,LineBuf
 L8E17:
   8E17  f07612     ld (LineBufRd),DE
-  8E1A  2e82       clr ($82)
+  8E1A  2e82       clr (TileColumnX)
 
-Line_BuildColumnA:
-; [I] build strobe table A for the next column
-  8E1C  178700     ld HL,$0087
+Line_NextColumnA:
+; [I] same chain as Line_FirstColumn, unrolled, for the next column (strobe tables A)
+  8E1C  178700     ld HL,ColumnPixels
   8E1F  164002     ld DE,ColumnSource
   8E22  3007       ld A,$07
-  8E24  e0825a     ld C,($82)
+  8E24  e0825a     ld C,(TileColumnX)
   8E27  ea63       sub A,C
   8E29  e89e       test (DE).A
   8E2B  e3c8       ld (HL).0,CF
@@ -2207,7 +2221,7 @@ Line_BuildColumnA:
   8EDE  5d         ld D,A
   8EDF  e0ff5c     ld E,(Palette)
   8EE2  ec7403     and E,$03
-  8EE5  178700     ld HL,$0087
+  8EE5  178700     ld HL,ColumnPixels
 L8EE8:
   8EE8  23         ld A,(HL)
   8EE9  7703       cmp A,$03
@@ -2230,11 +2244,11 @@ L8EFD:
   8EFD  eb3f9600   cmp HL,$0096
   8F01  d4e5       jr LE,L8EE8
 L8F03:
-  8F03  17b6cc     ld HL,Tab_PlaneCombine
-  8F06  2287       ld A,($87)
-  8F08  e0a708     rold A,($A7)
-  8F0B  e0a75a     ld C,($A7)
-  8F0E  e52697     ld ($97),(HL+C)
+  8F03  17b6cc     ld HL,Tab_EnergyByHistory
+  8F06  2287       ld A,(ColumnPixels)
+  8F08  e0a708     rold A,(RowHistory)
+  8F0B  e0a75a     ld C,(RowHistory)
+  8F0E  e52697     ld (ColumnHistCode),(HL+C)
   8F11  2288       ld A,($88)
   8F13  e0a808     rold A,($A8)
   8F16  e0a85a     ld C,($A8)
@@ -2295,22 +2309,22 @@ L8F03:
   8FAD  e0b608     rold A,($B6)
   8FB0  e0b65a     ld C,($B6)
   8FB3  e526a6     ld ($A6),(HL+C)
-  8FB6  166002     ld DE,$0260
-  8FB9  2282       ld A,($82)
+  8FB6  166002     ld DE,ColumnCodes
+  8FB9  2282       ld A,(TileColumnX)
   8FBB  01         swap A
   8FBC  3100       ld W,$00
   8FBE  ea31       add WA,DE
   8FC0  e816       ld DE,WA
-  8FC2  2287       ld A,($87)
+  8FC2  2287       ld A,(ColumnPixels)
   8FC4  1c         shlc A
   8FC5  5a         ld C,A
-  8FC6  17b6be     ld HL,Tab_ColumnTabPtrs
+  8FC6  17b6be     ld HL,Tab_HeatCorrPtrs
   8FC9  e517       ld HL,(HL+C)
-  8FCB  2260       ld A,(ColumnDots)
+  8FCB  2260       ld A,(RowHeatInt)
   8FCD  3100       ld W,$00
   8FCF  eb31       add WA,HL
   8FD1  e817       ld HL,WA
-  8FD3  e09759     ld W,($97)
+  8FD3  e09759     ld W,(ColumnHistCode)
   8FD6  2278       ld A,(HeatTime)
   8FD8  e379       add A,(HL)
   8FDA  e8df       test A.7
@@ -2330,7 +2344,7 @@ L8FEB:
   8FEE  2288       ld A,($88)
   8FF0  1c         shlc A
   8FF1  5a         ld C,A
-  8FF2  17b6be     ld HL,Tab_ColumnTabPtrs
+  8FF2  17b6be     ld HL,Tab_HeatCorrPtrs
   8FF5  e517       ld HL,(HL+C)
   8FF7  2261       ld A,($61)
   8FF9  3100       ld W,$00
@@ -2356,7 +2370,7 @@ L9017:
   901A  2289       ld A,($89)
   901C  1c         shlc A
   901D  5a         ld C,A
-  901E  17b6be     ld HL,Tab_ColumnTabPtrs
+  901E  17b6be     ld HL,Tab_HeatCorrPtrs
   9021  e517       ld HL,(HL+C)
   9023  2262       ld A,($62)
   9025  3100       ld W,$00
@@ -2382,7 +2396,7 @@ L9043:
   9046  228a       ld A,($8A)
   9048  1c         shlc A
   9049  5a         ld C,A
-  904A  17b6be     ld HL,Tab_ColumnTabPtrs
+  904A  17b6be     ld HL,Tab_HeatCorrPtrs
   904D  e517       ld HL,(HL+C)
   904F  2263       ld A,($63)
   9051  3100       ld W,$00
@@ -2408,7 +2422,7 @@ L906F:
   9072  228b       ld A,($8B)
   9074  1c         shlc A
   9075  5a         ld C,A
-  9076  17b6be     ld HL,Tab_ColumnTabPtrs
+  9076  17b6be     ld HL,Tab_HeatCorrPtrs
   9079  e517       ld HL,(HL+C)
   907B  2264       ld A,($64)
   907D  3100       ld W,$00
@@ -2434,7 +2448,7 @@ L909B:
   909E  228c       ld A,($8C)
   90A0  1c         shlc A
   90A1  5a         ld C,A
-  90A2  17b6be     ld HL,Tab_ColumnTabPtrs
+  90A2  17b6be     ld HL,Tab_HeatCorrPtrs
   90A5  e517       ld HL,(HL+C)
   90A7  2265       ld A,($65)
   90A9  3100       ld W,$00
@@ -2460,7 +2474,7 @@ L90C7:
   90CA  228d       ld A,($8D)
   90CC  1c         shlc A
   90CD  5a         ld C,A
-  90CE  17b6be     ld HL,Tab_ColumnTabPtrs
+  90CE  17b6be     ld HL,Tab_HeatCorrPtrs
   90D1  e517       ld HL,(HL+C)
   90D3  2266       ld A,($66)
   90D5  3100       ld W,$00
@@ -2486,7 +2500,7 @@ L90F3:
   90F6  228e       ld A,($8E)
   90F8  1c         shlc A
   90F9  5a         ld C,A
-  90FA  17b6be     ld HL,Tab_ColumnTabPtrs
+  90FA  17b6be     ld HL,Tab_HeatCorrPtrs
   90FD  e517       ld HL,(HL+C)
   90FF  2267       ld A,($67)
   9101  3100       ld W,$00
@@ -2512,7 +2526,7 @@ L911F:
   9122  228f       ld A,($8F)
   9124  1c         shlc A
   9125  5a         ld C,A
-  9126  17b6be     ld HL,Tab_ColumnTabPtrs
+  9126  17b6be     ld HL,Tab_HeatCorrPtrs
   9129  e517       ld HL,(HL+C)
   912B  2268       ld A,($68)
   912D  3100       ld W,$00
@@ -2538,7 +2552,7 @@ L914B:
   914E  2290       ld A,($90)
   9150  1c         shlc A
   9151  5a         ld C,A
-  9152  17b6be     ld HL,Tab_ColumnTabPtrs
+  9152  17b6be     ld HL,Tab_HeatCorrPtrs
   9155  e517       ld HL,(HL+C)
   9157  2269       ld A,($69)
   9159  3100       ld W,$00
@@ -2564,7 +2578,7 @@ L9177:
   917A  2291       ld A,($91)
   917C  1c         shlc A
   917D  5a         ld C,A
-  917E  17b6be     ld HL,Tab_ColumnTabPtrs
+  917E  17b6be     ld HL,Tab_HeatCorrPtrs
   9181  e517       ld HL,(HL+C)
   9183  226a       ld A,($6A)
   9185  3100       ld W,$00
@@ -2590,7 +2604,7 @@ L91A3:
   91A6  2292       ld A,($92)
   91A8  1c         shlc A
   91A9  5a         ld C,A
-  91AA  17b6be     ld HL,Tab_ColumnTabPtrs
+  91AA  17b6be     ld HL,Tab_HeatCorrPtrs
   91AD  e517       ld HL,(HL+C)
   91AF  226b       ld A,($6B)
   91B1  3100       ld W,$00
@@ -2616,7 +2630,7 @@ L91CF:
   91D2  2293       ld A,($93)
   91D4  1c         shlc A
   91D5  5a         ld C,A
-  91D6  17b6be     ld HL,Tab_ColumnTabPtrs
+  91D6  17b6be     ld HL,Tab_HeatCorrPtrs
   91D9  e517       ld HL,(HL+C)
   91DB  226c       ld A,($6C)
   91DD  3100       ld W,$00
@@ -2642,7 +2656,7 @@ L91FB:
   91FE  2294       ld A,($94)
   9200  1c         shlc A
   9201  5a         ld C,A
-  9202  17b6be     ld HL,Tab_ColumnTabPtrs
+  9202  17b6be     ld HL,Tab_HeatCorrPtrs
   9205  e517       ld HL,(HL+C)
   9207  226d       ld A,($6D)
   9209  3100       ld W,$00
@@ -2668,7 +2682,7 @@ L9227:
   922A  2295       ld A,($95)
   922C  1c         shlc A
   922D  5a         ld C,A
-  922E  17b6be     ld HL,Tab_ColumnTabPtrs
+  922E  17b6be     ld HL,Tab_HeatCorrPtrs
   9231  e517       ld HL,(HL+C)
   9233  226e       ld A,($6E)
   9235  3100       ld W,$00
@@ -2694,7 +2708,7 @@ L9253:
   9256  2296       ld A,($96)
   9258  1c         shlc A
   9259  5a         ld C,A
-  925A  17b6be     ld HL,Tab_ColumnTabPtrs
+  925A  17b6be     ld HL,Tab_HeatCorrPtrs
   925D  e517       ld HL,(HL+C)
   925F  226f       ld A,($6F)
   9261  3100       ld W,$00
@@ -2716,34 +2730,34 @@ L927A:
   927D  3000       ld A,$00
 L927F:
   927F  f250       ld (DE),A
-  9281  166002     ld DE,$0260
-  9284  2282       ld A,($82)
+  9281  166002     ld DE,ColumnCodes
+  9284  2282       ld A,(TileColumnX)
   9286  01         swap A
   9287  3100       ld W,$00
   9289  ea31       add WA,DE
   928B  e817       ld HL,WA
   928D  e35a       ld C,(HL)
-  928F  1776d1     ld HL,Tab_D176
+  928F  1776d1     ld HL,Tab_HeatAddByCode
   9292  e558       ld A,(HL+C)
   9294  d021       jr Z,L92B7
-  9296  40fa       set ($FA).0
+  9296  40fa       set (DotMask).0
   9298  d71f       jr F,L92B9
-  929A  e0a77703   cmp ($A7),$03
+  929A  e0a77703   cmp (RowHistory),$03
   929E  d519       jr GT,L92B9
   92A0  e0fd5a     ld C,(TempAdc)
   92A3  3300       ld B,$00
   92A5  ea1c       shlc C
   92A7  eb1e       rolc B
-  92A9  1476d2     ld WA,Tab_D276
+  92A9  1476d2     ld WA,Tab_HeatAddFreshByTemp
   92AC  e931       add WA,BC
   92AE  e817       ld HL,WA
   92B0  e314       ld WA,(HL)
-  92B2  e0b717     ld HL,($B7)
+  92B2  e0b717     ld HL,(RowHeat)
   92B5  fb13       jr L92CA
 L92B7:
-  92B7  22f9       ld A,($F9)
+  92B7  22f9       ld A,(IdleCool)
 L92B9:
-  92B9  e0b717     ld HL,($B7)
+  92B9  e0b717     ld HL,(RowHeat)
   92BC  e8df       test A.7
   92BE  88         jrs T,L92C8
   92BF  31ff       ld W,$FF
@@ -2758,18 +2772,18 @@ L92CA:
   92CC  a2         jrs F,L92D0
   92CD  14ffff     ld WA,$FFFF
 L92D0:
-  92D0  f0b710     ld ($B7),WA
+  92D0  f0b710     ld (RowHeat),WA
   92D3  12         inc DE
-  92D4  2282       ld A,($82)
+  92D4  2282       ld A,(TileColumnX)
   92D6  01         swap A
   92D7  3100       ld W,$00
   92D9  ea31       add WA,DE
   92DB  e817       ld HL,WA
   92DD  e35a       ld C,(HL)
-  92DF  1776d1     ld HL,Tab_D176
+  92DF  1776d1     ld HL,Tab_HeatAddByCode
   92E2  e558       ld A,(HL+C)
   92E4  d021       jr Z,L9307
-  92E6  41fa       set ($FA).1
+  92E6  41fa       set (DotMask).1
   92E8  d71f       jr F,L9309
   92EA  e0a87703   cmp ($A8),$03
   92EE  d519       jr GT,L9309
@@ -2777,14 +2791,14 @@ L92D0:
   92F3  3300       ld B,$00
   92F5  ea1c       shlc C
   92F7  eb1e       rolc B
-  92F9  1476d2     ld WA,Tab_D276
+  92F9  1476d2     ld WA,Tab_HeatAddFreshByTemp
   92FC  e931       add WA,BC
   92FE  e817       ld HL,WA
   9300  e314       ld WA,(HL)
   9302  e0b917     ld HL,($B9)
   9305  fb13       jr L931A
 L9307:
-  9307  22f9       ld A,($F9)
+  9307  22f9       ld A,(IdleCool)
 L9309:
   9309  e0b917     ld HL,($B9)
   930C  e8df       test A.7
@@ -2803,16 +2817,16 @@ L931A:
 L9320:
   9320  f0b910     ld ($B9),WA
   9323  12         inc DE
-  9324  2282       ld A,($82)
+  9324  2282       ld A,(TileColumnX)
   9326  01         swap A
   9327  3100       ld W,$00
   9329  ea31       add WA,DE
   932B  e817       ld HL,WA
   932D  e35a       ld C,(HL)
-  932F  1776d1     ld HL,Tab_D176
+  932F  1776d1     ld HL,Tab_HeatAddByCode
   9332  e558       ld A,(HL+C)
   9334  d021       jr Z,L9357
-  9336  42fa       set ($FA).2
+  9336  42fa       set (DotMask).2
   9338  d71f       jr F,L9359
   933A  e0a97703   cmp ($A9),$03
   933E  d519       jr GT,L9359
@@ -2820,14 +2834,14 @@ L9320:
   9343  3300       ld B,$00
   9345  ea1c       shlc C
   9347  eb1e       rolc B
-  9349  1476d2     ld WA,Tab_D276
+  9349  1476d2     ld WA,Tab_HeatAddFreshByTemp
   934C  e931       add WA,BC
   934E  e817       ld HL,WA
   9350  e314       ld WA,(HL)
   9352  e0bb17     ld HL,($BB)
   9355  fb13       jr L936A
 L9357:
-  9357  22f9       ld A,($F9)
+  9357  22f9       ld A,(IdleCool)
 L9359:
   9359  e0bb17     ld HL,($BB)
   935C  e8df       test A.7
@@ -2846,16 +2860,16 @@ L936A:
 L9370:
   9370  f0bb10     ld ($BB),WA
   9373  12         inc DE
-  9374  2282       ld A,($82)
+  9374  2282       ld A,(TileColumnX)
   9376  01         swap A
   9377  3100       ld W,$00
   9379  ea31       add WA,DE
   937B  e817       ld HL,WA
   937D  e35a       ld C,(HL)
-  937F  1776d1     ld HL,Tab_D176
+  937F  1776d1     ld HL,Tab_HeatAddByCode
   9382  e558       ld A,(HL+C)
   9384  d021       jr Z,L93A7
-  9386  43fa       set ($FA).3
+  9386  43fa       set (DotMask).3
   9388  d71f       jr F,L93A9
   938A  e0aa7703   cmp ($AA),$03
   938E  d519       jr GT,L93A9
@@ -2863,14 +2877,14 @@ L9370:
   9393  3300       ld B,$00
   9395  ea1c       shlc C
   9397  eb1e       rolc B
-  9399  1476d2     ld WA,Tab_D276
+  9399  1476d2     ld WA,Tab_HeatAddFreshByTemp
   939C  e931       add WA,BC
   939E  e817       ld HL,WA
   93A0  e314       ld WA,(HL)
   93A2  e0bd17     ld HL,($BD)
   93A5  fb13       jr L93BA
 L93A7:
-  93A7  22f9       ld A,($F9)
+  93A7  22f9       ld A,(IdleCool)
 L93A9:
   93A9  e0bd17     ld HL,($BD)
   93AC  e8df       test A.7
@@ -2889,16 +2903,16 @@ L93BA:
 L93C0:
   93C0  f0bd10     ld ($BD),WA
   93C3  12         inc DE
-  93C4  2282       ld A,($82)
+  93C4  2282       ld A,(TileColumnX)
   93C6  01         swap A
   93C7  3100       ld W,$00
   93C9  ea31       add WA,DE
   93CB  e817       ld HL,WA
   93CD  e35a       ld C,(HL)
-  93CF  1776d1     ld HL,Tab_D176
+  93CF  1776d1     ld HL,Tab_HeatAddByCode
   93D2  e558       ld A,(HL+C)
   93D4  d021       jr Z,L93F7
-  93D6  44fa       set ($FA).4
+  93D6  44fa       set (DotMask).4
   93D8  d71f       jr F,L93F9
   93DA  e0ab7703   cmp ($AB),$03
   93DE  d519       jr GT,L93F9
@@ -2906,14 +2920,14 @@ L93C0:
   93E3  3300       ld B,$00
   93E5  ea1c       shlc C
   93E7  eb1e       rolc B
-  93E9  1476d2     ld WA,Tab_D276
+  93E9  1476d2     ld WA,Tab_HeatAddFreshByTemp
   93EC  e931       add WA,BC
   93EE  e817       ld HL,WA
   93F0  e314       ld WA,(HL)
   93F2  e0bf17     ld HL,($BF)
   93F5  fb13       jr L940A
 L93F7:
-  93F7  22f9       ld A,($F9)
+  93F7  22f9       ld A,(IdleCool)
 L93F9:
   93F9  e0bf17     ld HL,($BF)
   93FC  e8df       test A.7
@@ -2932,16 +2946,16 @@ L940A:
 L9410:
   9410  f0bf10     ld ($BF),WA
   9413  12         inc DE
-  9414  2282       ld A,($82)
+  9414  2282       ld A,(TileColumnX)
   9416  01         swap A
   9417  3100       ld W,$00
   9419  ea31       add WA,DE
   941B  e817       ld HL,WA
   941D  e35a       ld C,(HL)
-  941F  1776d1     ld HL,Tab_D176
+  941F  1776d1     ld HL,Tab_HeatAddByCode
   9422  e558       ld A,(HL+C)
   9424  d021       jr Z,L9447
-  9426  45fa       set ($FA).5
+  9426  45fa       set (DotMask).5
   9428  d71f       jr F,L9449
   942A  e0ac7703   cmp ($AC),$03
   942E  d519       jr GT,L9449
@@ -2949,14 +2963,14 @@ L9410:
   9433  3300       ld B,$00
   9435  ea1c       shlc C
   9437  eb1e       rolc B
-  9439  1476d2     ld WA,Tab_D276
+  9439  1476d2     ld WA,Tab_HeatAddFreshByTemp
   943C  e931       add WA,BC
   943E  e817       ld HL,WA
   9440  e314       ld WA,(HL)
   9442  e0c117     ld HL,($C1)
   9445  fb13       jr L945A
 L9447:
-  9447  22f9       ld A,($F9)
+  9447  22f9       ld A,(IdleCool)
 L9449:
   9449  e0c117     ld HL,($C1)
   944C  e8df       test A.7
@@ -2975,16 +2989,16 @@ L945A:
 L9460:
   9460  f0c110     ld ($C1),WA
   9463  12         inc DE
-  9464  2282       ld A,($82)
+  9464  2282       ld A,(TileColumnX)
   9466  01         swap A
   9467  3100       ld W,$00
   9469  ea31       add WA,DE
   946B  e817       ld HL,WA
   946D  e35a       ld C,(HL)
-  946F  1776d1     ld HL,Tab_D176
+  946F  1776d1     ld HL,Tab_HeatAddByCode
   9472  e558       ld A,(HL+C)
   9474  d021       jr Z,L9497
-  9476  46fa       set ($FA).6
+  9476  46fa       set (DotMask).6
   9478  d71f       jr F,L9499
   947A  e0ad7703   cmp ($AD),$03
   947E  d519       jr GT,L9499
@@ -2992,14 +3006,14 @@ L9460:
   9483  3300       ld B,$00
   9485  ea1c       shlc C
   9487  eb1e       rolc B
-  9489  1476d2     ld WA,Tab_D276
+  9489  1476d2     ld WA,Tab_HeatAddFreshByTemp
   948C  e931       add WA,BC
   948E  e817       ld HL,WA
   9490  e314       ld WA,(HL)
   9492  e0c317     ld HL,($C3)
   9495  fb13       jr L94AA
 L9497:
-  9497  22f9       ld A,($F9)
+  9497  22f9       ld A,(IdleCool)
 L9499:
   9499  e0c317     ld HL,($C3)
   949C  e8df       test A.7
@@ -3018,16 +3032,16 @@ L94AA:
 L94B0:
   94B0  f0c310     ld ($C3),WA
   94B3  12         inc DE
-  94B4  2282       ld A,($82)
+  94B4  2282       ld A,(TileColumnX)
   94B6  01         swap A
   94B7  3100       ld W,$00
   94B9  ea31       add WA,DE
   94BB  e817       ld HL,WA
   94BD  e35a       ld C,(HL)
-  94BF  1776d1     ld HL,Tab_D176
+  94BF  1776d1     ld HL,Tab_HeatAddByCode
   94C2  e558       ld A,(HL+C)
   94C4  d021       jr Z,L94E7
-  94C6  47fa       set ($FA).7
+  94C6  47fa       set (DotMask).7
   94C8  d71f       jr F,L94E9
   94CA  e0ae7703   cmp ($AE),$03
   94CE  d519       jr GT,L94E9
@@ -3035,14 +3049,14 @@ L94B0:
   94D3  3300       ld B,$00
   94D5  ea1c       shlc C
   94D7  eb1e       rolc B
-  94D9  1476d2     ld WA,Tab_D276
+  94D9  1476d2     ld WA,Tab_HeatAddFreshByTemp
   94DC  e931       add WA,BC
   94DE  e817       ld HL,WA
   94E0  e314       ld WA,(HL)
   94E2  e0c517     ld HL,($C5)
   94E5  fb13       jr L94FA
 L94E7:
-  94E7  22f9       ld A,($F9)
+  94E7  22f9       ld A,(IdleCool)
 L94E9:
   94E9  e0c517     ld HL,($C5)
   94EC  e8df       test A.7
@@ -3061,13 +3075,13 @@ L94FA:
 L9500:
   9500  f0c510     ld ($C5),WA
   9503  12         inc DE
-  9504  2282       ld A,($82)
+  9504  2282       ld A,(TileColumnX)
   9506  01         swap A
   9507  3100       ld W,$00
   9509  ea31       add WA,DE
   950B  e817       ld HL,WA
   950D  e35a       ld C,(HL)
-  950F  1776d1     ld HL,Tab_D176
+  950F  1776d1     ld HL,Tab_HeatAddByCode
   9512  e558       ld A,(HL+C)
   9514  d021       jr Z,L9537
   9516  40fb       set ($FB).0
@@ -3078,14 +3092,14 @@ L9500:
   9523  3300       ld B,$00
   9525  ea1c       shlc C
   9527  eb1e       rolc B
-  9529  1476d2     ld WA,Tab_D276
+  9529  1476d2     ld WA,Tab_HeatAddFreshByTemp
   952C  e931       add WA,BC
   952E  e817       ld HL,WA
   9530  e314       ld WA,(HL)
   9532  e0c717     ld HL,($C7)
   9535  fb13       jr L954A
 L9537:
-  9537  22f9       ld A,($F9)
+  9537  22f9       ld A,(IdleCool)
 L9539:
   9539  e0c717     ld HL,($C7)
   953C  e8df       test A.7
@@ -3104,13 +3118,13 @@ L954A:
 L9550:
   9550  f0c710     ld ($C7),WA
   9553  12         inc DE
-  9554  2282       ld A,($82)
+  9554  2282       ld A,(TileColumnX)
   9556  01         swap A
   9557  3100       ld W,$00
   9559  ea31       add WA,DE
   955B  e817       ld HL,WA
   955D  e35a       ld C,(HL)
-  955F  1776d1     ld HL,Tab_D176
+  955F  1776d1     ld HL,Tab_HeatAddByCode
   9562  e558       ld A,(HL+C)
   9564  d021       jr Z,L9587
   9566  41fb       set ($FB).1
@@ -3121,14 +3135,14 @@ L9550:
   9573  3300       ld B,$00
   9575  ea1c       shlc C
   9577  eb1e       rolc B
-  9579  1476d2     ld WA,Tab_D276
+  9579  1476d2     ld WA,Tab_HeatAddFreshByTemp
   957C  e931       add WA,BC
   957E  e817       ld HL,WA
   9580  e314       ld WA,(HL)
   9582  e0c917     ld HL,($C9)
   9585  fb13       jr L959A
 L9587:
-  9587  22f9       ld A,($F9)
+  9587  22f9       ld A,(IdleCool)
 L9589:
   9589  e0c917     ld HL,($C9)
   958C  e8df       test A.7
@@ -3147,13 +3161,13 @@ L959A:
 L95A0:
   95A0  f0c910     ld ($C9),WA
   95A3  12         inc DE
-  95A4  2282       ld A,($82)
+  95A4  2282       ld A,(TileColumnX)
   95A6  01         swap A
   95A7  3100       ld W,$00
   95A9  ea31       add WA,DE
   95AB  e817       ld HL,WA
   95AD  e35a       ld C,(HL)
-  95AF  1776d1     ld HL,Tab_D176
+  95AF  1776d1     ld HL,Tab_HeatAddByCode
   95B2  e558       ld A,(HL+C)
   95B4  d021       jr Z,L95D7
   95B6  42fb       set ($FB).2
@@ -3164,14 +3178,14 @@ L95A0:
   95C3  3300       ld B,$00
   95C5  ea1c       shlc C
   95C7  eb1e       rolc B
-  95C9  1476d2     ld WA,Tab_D276
+  95C9  1476d2     ld WA,Tab_HeatAddFreshByTemp
   95CC  e931       add WA,BC
   95CE  e817       ld HL,WA
   95D0  e314       ld WA,(HL)
   95D2  e0cb17     ld HL,($CB)
   95D5  fb13       jr L95EA
 L95D7:
-  95D7  22f9       ld A,($F9)
+  95D7  22f9       ld A,(IdleCool)
 L95D9:
   95D9  e0cb17     ld HL,($CB)
   95DC  e8df       test A.7
@@ -3190,13 +3204,13 @@ L95EA:
 L95F0:
   95F0  f0cb10     ld ($CB),WA
   95F3  12         inc DE
-  95F4  2282       ld A,($82)
+  95F4  2282       ld A,(TileColumnX)
   95F6  01         swap A
   95F7  3100       ld W,$00
   95F9  ea31       add WA,DE
   95FB  e817       ld HL,WA
   95FD  e35a       ld C,(HL)
-  95FF  1776d1     ld HL,Tab_D176
+  95FF  1776d1     ld HL,Tab_HeatAddByCode
   9602  e558       ld A,(HL+C)
   9604  d021       jr Z,L9627
   9606  43fb       set ($FB).3
@@ -3207,14 +3221,14 @@ L95F0:
   9613  3300       ld B,$00
   9615  ea1c       shlc C
   9617  eb1e       rolc B
-  9619  1476d2     ld WA,Tab_D276
+  9619  1476d2     ld WA,Tab_HeatAddFreshByTemp
   961C  e931       add WA,BC
   961E  e817       ld HL,WA
   9620  e314       ld WA,(HL)
   9622  e0cd17     ld HL,($CD)
   9625  fb13       jr L963A
 L9627:
-  9627  22f9       ld A,($F9)
+  9627  22f9       ld A,(IdleCool)
 L9629:
   9629  e0cd17     ld HL,($CD)
   962C  e8df       test A.7
@@ -3233,13 +3247,13 @@ L963A:
 L9640:
   9640  f0cd10     ld ($CD),WA
   9643  12         inc DE
-  9644  2282       ld A,($82)
+  9644  2282       ld A,(TileColumnX)
   9646  01         swap A
   9647  3100       ld W,$00
   9649  ea31       add WA,DE
   964B  e817       ld HL,WA
   964D  e35a       ld C,(HL)
-  964F  1776d1     ld HL,Tab_D176
+  964F  1776d1     ld HL,Tab_HeatAddByCode
   9652  e558       ld A,(HL+C)
   9654  d021       jr Z,L9677
   9656  44fb       set ($FB).4
@@ -3250,14 +3264,14 @@ L9640:
   9663  3300       ld B,$00
   9665  ea1c       shlc C
   9667  eb1e       rolc B
-  9669  1476d2     ld WA,Tab_D276
+  9669  1476d2     ld WA,Tab_HeatAddFreshByTemp
   966C  e931       add WA,BC
   966E  e817       ld HL,WA
   9670  e314       ld WA,(HL)
   9672  e0cf17     ld HL,($CF)
   9675  fb13       jr L968A
 L9677:
-  9677  22f9       ld A,($F9)
+  9677  22f9       ld A,(IdleCool)
 L9679:
   9679  e0cf17     ld HL,($CF)
   967C  e8df       test A.7
@@ -3276,13 +3290,13 @@ L968A:
 L9690:
   9690  f0cf10     ld ($CF),WA
   9693  12         inc DE
-  9694  2282       ld A,($82)
+  9694  2282       ld A,(TileColumnX)
   9696  01         swap A
   9697  3100       ld W,$00
   9699  ea31       add WA,DE
   969B  e817       ld HL,WA
   969D  e35a       ld C,(HL)
-  969F  1776d1     ld HL,Tab_D176
+  969F  1776d1     ld HL,Tab_HeatAddByCode
   96A2  e558       ld A,(HL+C)
   96A4  d021       jr Z,L96C7
   96A6  45fb       set ($FB).5
@@ -3293,14 +3307,14 @@ L9690:
   96B3  3300       ld B,$00
   96B5  ea1c       shlc C
   96B7  eb1e       rolc B
-  96B9  1476d2     ld WA,Tab_D276
+  96B9  1476d2     ld WA,Tab_HeatAddFreshByTemp
   96BC  e931       add WA,BC
   96BE  e817       ld HL,WA
   96C0  e314       ld WA,(HL)
   96C2  e0d117     ld HL,($D1)
   96C5  fb13       jr L96DA
 L96C7:
-  96C7  22f9       ld A,($F9)
+  96C7  22f9       ld A,(IdleCool)
 L96C9:
   96C9  e0d117     ld HL,($D1)
   96CC  e8df       test A.7
@@ -3319,13 +3333,13 @@ L96DA:
 L96E0:
   96E0  f0d110     ld ($D1),WA
   96E3  12         inc DE
-  96E4  2282       ld A,($82)
+  96E4  2282       ld A,(TileColumnX)
   96E6  01         swap A
   96E7  3100       ld W,$00
   96E9  ea31       add WA,DE
   96EB  e817       ld HL,WA
   96ED  e35a       ld C,(HL)
-  96EF  1776d1     ld HL,Tab_D176
+  96EF  1776d1     ld HL,Tab_HeatAddByCode
   96F2  e558       ld A,(HL+C)
   96F4  d021       jr Z,L9717
   96F6  46fb       set ($FB).6
@@ -3336,14 +3350,14 @@ L96E0:
   9703  3300       ld B,$00
   9705  ea1c       shlc C
   9707  eb1e       rolc B
-  9709  1476d2     ld WA,Tab_D276
+  9709  1476d2     ld WA,Tab_HeatAddFreshByTemp
   970C  e931       add WA,BC
   970E  e817       ld HL,WA
   9710  e314       ld WA,(HL)
   9712  e0d317     ld HL,($D3)
   9715  fb13       jr L972A
 L9717:
-  9717  22f9       ld A,($F9)
+  9717  22f9       ld A,(IdleCool)
 L9719:
   9719  e0d317     ld HL,($D3)
   971C  e8df       test A.7
@@ -3362,13 +3376,13 @@ L972A:
 L9730:
   9730  f0d310     ld ($D3),WA
   9733  12         inc DE
-  9734  2282       ld A,($82)
+  9734  2282       ld A,(TileColumnX)
   9736  01         swap A
   9737  3100       ld W,$00
   9739  ea31       add WA,DE
   973B  e817       ld HL,WA
   973D  e35a       ld C,(HL)
-  973F  1776d1     ld HL,Tab_D176
+  973F  1776d1     ld HL,Tab_HeatAddByCode
   9742  e558       ld A,(HL+C)
   9744  d021       jr Z,L9767
   9746  47fb       set ($FB).7
@@ -3379,14 +3393,14 @@ L9730:
   9753  3300       ld B,$00
   9755  ea1c       shlc C
   9757  eb1e       rolc B
-  9759  1476d2     ld WA,Tab_D276
+  9759  1476d2     ld WA,Tab_HeatAddFreshByTemp
   975C  e931       add WA,BC
   975E  e817       ld HL,WA
   9760  e314       ld WA,(HL)
   9762  e0d517     ld HL,($D5)
   9765  fb13       jr L977A
 L9767:
-  9767  22f9       ld A,($F9)
+  9767  22f9       ld A,(IdleCool)
 L9769:
   9769  e0d517     ld HL,($D5)
   976C  e8df       test A.7
@@ -3404,13 +3418,13 @@ L977A:
   977D  14ffff     ld WA,$FFFF
 L9780:
   9780  f0d510     ld ($D5),WA
-  9783  2082       inc ($82)
-  9785  e0827708   cmp ($82),$08
+  9783  2082       inc (TileColumnX)
+  9785  e0827708   cmp (TileColumnX),$08
   9789  d303       jr CC,L978E
-  978B  fe1c8e     jp Line_BuildColumnA
+  978B  fe1c8e     jp Line_NextColumnA
 L978E:
   978E  4070       set (MechFlags).0   ; LineReady
-  9790  fe9da1     jp LA19D
+  9790  fe9da1     jp Line_TileColumnDone
 L9793:
   9793  d970       test (MechFlags).1   ; LineFetch
   9795  82         jrs T,L9799
@@ -3517,14 +3531,14 @@ L9799:
   9821  160001     ld DE,LineBuf
 L9824:
   9824  f07612     ld (LineBufRd),DE
-  9827  2e82       clr ($82)
+  9827  2e82       clr (TileColumnX)
 
-Line_BuildColumnB:
-; [I] build strobe table B for the next column
-  9829  178700     ld HL,$0087
+Line_NextColumnB:
+; [I] same chain for the strobe tables B
+  9829  178700     ld HL,ColumnPixels
   982C  164002     ld DE,ColumnSource
   982F  3007       ld A,$07
-  9831  e0825a     ld C,($82)
+  9831  e0825a     ld C,(TileColumnX)
   9834  ea63       sub A,C
   9836  e89e       test (DE).A
   9838  e3c8       ld (HL).0,CF
@@ -3639,7 +3653,7 @@ Line_BuildColumnB:
   98EB  5d         ld D,A
   98EC  e0ff5c     ld E,(Palette)
   98EF  ec7403     and E,$03
-  98F2  178700     ld HL,$0087
+  98F2  178700     ld HL,ColumnPixels
 L98F5:
   98F5  23         ld A,(HL)
   98F6  7703       cmp A,$03
@@ -3662,11 +3676,11 @@ L990A:
   990A  eb3f9600   cmp HL,$0096
   990E  d4e5       jr LE,L98F5
 L9910:
-  9910  17b6cc     ld HL,Tab_PlaneCombine
-  9913  2287       ld A,($87)
-  9915  e0a708     rold A,($A7)
-  9918  e0a75a     ld C,($A7)
-  991B  e52697     ld ($97),(HL+C)
+  9910  17b6cc     ld HL,Tab_EnergyByHistory
+  9913  2287       ld A,(ColumnPixels)
+  9915  e0a708     rold A,(RowHistory)
+  9918  e0a75a     ld C,(RowHistory)
+  991B  e52697     ld (ColumnHistCode),(HL+C)
   991E  2288       ld A,($88)
   9920  e0a808     rold A,($A8)
   9923  e0a85a     ld C,($A8)
@@ -3728,21 +3742,21 @@ L9910:
   99BD  e0b65a     ld C,($B6)
   99C0  e526a6     ld ($A6),(HL+C)
   99C3  16e002     ld DE,$02E0
-  99C6  2282       ld A,($82)
+  99C6  2282       ld A,(TileColumnX)
   99C8  01         swap A
   99C9  3100       ld W,$00
   99CB  ea31       add WA,DE
   99CD  e816       ld DE,WA
-  99CF  2287       ld A,($87)
+  99CF  2287       ld A,(ColumnPixels)
   99D1  1c         shlc A
   99D2  5a         ld C,A
-  99D3  17b6be     ld HL,Tab_ColumnTabPtrs
+  99D3  17b6be     ld HL,Tab_HeatCorrPtrs
   99D6  e517       ld HL,(HL+C)
-  99D8  2260       ld A,(ColumnDots)
+  99D8  2260       ld A,(RowHeatInt)
   99DA  3100       ld W,$00
   99DC  eb31       add WA,HL
   99DE  e817       ld HL,WA
-  99E0  e09759     ld W,($97)
+  99E0  e09759     ld W,(ColumnHistCode)
   99E3  2278       ld A,(HeatTime)
   99E5  e379       add A,(HL)
   99E7  e8df       test A.7
@@ -3762,7 +3776,7 @@ L99F8:
   99FB  2288       ld A,($88)
   99FD  1c         shlc A
   99FE  5a         ld C,A
-  99FF  17b6be     ld HL,Tab_ColumnTabPtrs
+  99FF  17b6be     ld HL,Tab_HeatCorrPtrs
   9A02  e517       ld HL,(HL+C)
   9A04  2261       ld A,($61)
   9A06  3100       ld W,$00
@@ -3788,7 +3802,7 @@ L9A24:
   9A27  2289       ld A,($89)
   9A29  1c         shlc A
   9A2A  5a         ld C,A
-  9A2B  17b6be     ld HL,Tab_ColumnTabPtrs
+  9A2B  17b6be     ld HL,Tab_HeatCorrPtrs
   9A2E  e517       ld HL,(HL+C)
   9A30  2262       ld A,($62)
   9A32  3100       ld W,$00
@@ -3814,7 +3828,7 @@ L9A50:
   9A53  228a       ld A,($8A)
   9A55  1c         shlc A
   9A56  5a         ld C,A
-  9A57  17b6be     ld HL,Tab_ColumnTabPtrs
+  9A57  17b6be     ld HL,Tab_HeatCorrPtrs
   9A5A  e517       ld HL,(HL+C)
   9A5C  2263       ld A,($63)
   9A5E  3100       ld W,$00
@@ -3840,7 +3854,7 @@ L9A7C:
   9A7F  228b       ld A,($8B)
   9A81  1c         shlc A
   9A82  5a         ld C,A
-  9A83  17b6be     ld HL,Tab_ColumnTabPtrs
+  9A83  17b6be     ld HL,Tab_HeatCorrPtrs
   9A86  e517       ld HL,(HL+C)
   9A88  2264       ld A,($64)
   9A8A  3100       ld W,$00
@@ -3866,7 +3880,7 @@ L9AA8:
   9AAB  228c       ld A,($8C)
   9AAD  1c         shlc A
   9AAE  5a         ld C,A
-  9AAF  17b6be     ld HL,Tab_ColumnTabPtrs
+  9AAF  17b6be     ld HL,Tab_HeatCorrPtrs
   9AB2  e517       ld HL,(HL+C)
   9AB4  2265       ld A,($65)
   9AB6  3100       ld W,$00
@@ -3892,7 +3906,7 @@ L9AD4:
   9AD7  228d       ld A,($8D)
   9AD9  1c         shlc A
   9ADA  5a         ld C,A
-  9ADB  17b6be     ld HL,Tab_ColumnTabPtrs
+  9ADB  17b6be     ld HL,Tab_HeatCorrPtrs
   9ADE  e517       ld HL,(HL+C)
   9AE0  2266       ld A,($66)
   9AE2  3100       ld W,$00
@@ -3918,7 +3932,7 @@ L9B00:
   9B03  228e       ld A,($8E)
   9B05  1c         shlc A
   9B06  5a         ld C,A
-  9B07  17b6be     ld HL,Tab_ColumnTabPtrs
+  9B07  17b6be     ld HL,Tab_HeatCorrPtrs
   9B0A  e517       ld HL,(HL+C)
   9B0C  2267       ld A,($67)
   9B0E  3100       ld W,$00
@@ -3944,7 +3958,7 @@ L9B2C:
   9B2F  228f       ld A,($8F)
   9B31  1c         shlc A
   9B32  5a         ld C,A
-  9B33  17b6be     ld HL,Tab_ColumnTabPtrs
+  9B33  17b6be     ld HL,Tab_HeatCorrPtrs
   9B36  e517       ld HL,(HL+C)
   9B38  2268       ld A,($68)
   9B3A  3100       ld W,$00
@@ -3970,7 +3984,7 @@ L9B58:
   9B5B  2290       ld A,($90)
   9B5D  1c         shlc A
   9B5E  5a         ld C,A
-  9B5F  17b6be     ld HL,Tab_ColumnTabPtrs
+  9B5F  17b6be     ld HL,Tab_HeatCorrPtrs
   9B62  e517       ld HL,(HL+C)
   9B64  2269       ld A,($69)
   9B66  3100       ld W,$00
@@ -3996,7 +4010,7 @@ L9B84:
   9B87  2291       ld A,($91)
   9B89  1c         shlc A
   9B8A  5a         ld C,A
-  9B8B  17b6be     ld HL,Tab_ColumnTabPtrs
+  9B8B  17b6be     ld HL,Tab_HeatCorrPtrs
   9B8E  e517       ld HL,(HL+C)
   9B90  226a       ld A,($6A)
   9B92  3100       ld W,$00
@@ -4022,7 +4036,7 @@ L9BB0:
   9BB3  2292       ld A,($92)
   9BB5  1c         shlc A
   9BB6  5a         ld C,A
-  9BB7  17b6be     ld HL,Tab_ColumnTabPtrs
+  9BB7  17b6be     ld HL,Tab_HeatCorrPtrs
   9BBA  e517       ld HL,(HL+C)
   9BBC  226b       ld A,($6B)
   9BBE  3100       ld W,$00
@@ -4048,7 +4062,7 @@ L9BDC:
   9BDF  2293       ld A,($93)
   9BE1  1c         shlc A
   9BE2  5a         ld C,A
-  9BE3  17b6be     ld HL,Tab_ColumnTabPtrs
+  9BE3  17b6be     ld HL,Tab_HeatCorrPtrs
   9BE6  e517       ld HL,(HL+C)
   9BE8  226c       ld A,($6C)
   9BEA  3100       ld W,$00
@@ -4074,7 +4088,7 @@ L9C08:
   9C0B  2294       ld A,($94)
   9C0D  1c         shlc A
   9C0E  5a         ld C,A
-  9C0F  17b6be     ld HL,Tab_ColumnTabPtrs
+  9C0F  17b6be     ld HL,Tab_HeatCorrPtrs
   9C12  e517       ld HL,(HL+C)
   9C14  226d       ld A,($6D)
   9C16  3100       ld W,$00
@@ -4100,7 +4114,7 @@ L9C34:
   9C37  2295       ld A,($95)
   9C39  1c         shlc A
   9C3A  5a         ld C,A
-  9C3B  17b6be     ld HL,Tab_ColumnTabPtrs
+  9C3B  17b6be     ld HL,Tab_HeatCorrPtrs
   9C3E  e517       ld HL,(HL+C)
   9C40  226e       ld A,($6E)
   9C42  3100       ld W,$00
@@ -4126,7 +4140,7 @@ L9C60:
   9C63  2296       ld A,($96)
   9C65  1c         shlc A
   9C66  5a         ld C,A
-  9C67  17b6be     ld HL,Tab_ColumnTabPtrs
+  9C67  17b6be     ld HL,Tab_HeatCorrPtrs
   9C6A  e517       ld HL,(HL+C)
   9C6C  226f       ld A,($6F)
   9C6E  3100       ld W,$00
@@ -4149,33 +4163,33 @@ L9C87:
 L9C8C:
   9C8C  f250       ld (DE),A
   9C8E  16e002     ld DE,$02E0
-  9C91  2282       ld A,($82)
+  9C91  2282       ld A,(TileColumnX)
   9C93  01         swap A
   9C94  3100       ld W,$00
   9C96  ea31       add WA,DE
   9C98  e817       ld HL,WA
   9C9A  e35a       ld C,(HL)
-  9C9C  1776d1     ld HL,Tab_D176
+  9C9C  1776d1     ld HL,Tab_HeatAddByCode
   9C9F  e558       ld A,(HL+C)
   9CA1  d021       jr Z,L9CC4
-  9CA3  40fa       set ($FA).0
+  9CA3  40fa       set (DotMask).0
   9CA5  d71f       jr F,L9CC6
-  9CA7  e0a77703   cmp ($A7),$03
+  9CA7  e0a77703   cmp (RowHistory),$03
   9CAB  d519       jr GT,L9CC6
   9CAD  e0fd5a     ld C,(TempAdc)
   9CB0  3300       ld B,$00
   9CB2  ea1c       shlc C
   9CB4  eb1e       rolc B
-  9CB6  1476d2     ld WA,Tab_D276
+  9CB6  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9CB9  e931       add WA,BC
   9CBB  e817       ld HL,WA
   9CBD  e314       ld WA,(HL)
-  9CBF  e0b717     ld HL,($B7)
+  9CBF  e0b717     ld HL,(RowHeat)
   9CC2  fb13       jr L9CD7
 L9CC4:
-  9CC4  22f9       ld A,($F9)
+  9CC4  22f9       ld A,(IdleCool)
 L9CC6:
-  9CC6  e0b717     ld HL,($B7)
+  9CC6  e0b717     ld HL,(RowHeat)
   9CC9  e8df       test A.7
   9CCB  88         jrs T,L9CD5
   9CCC  31ff       ld W,$FF
@@ -4190,18 +4204,18 @@ L9CD7:
   9CD9  a2         jrs F,L9CDD
   9CDA  14ffff     ld WA,$FFFF
 L9CDD:
-  9CDD  f0b710     ld ($B7),WA
+  9CDD  f0b710     ld (RowHeat),WA
   9CE0  12         inc DE
-  9CE1  2282       ld A,($82)
+  9CE1  2282       ld A,(TileColumnX)
   9CE3  01         swap A
   9CE4  3100       ld W,$00
   9CE6  ea31       add WA,DE
   9CE8  e817       ld HL,WA
   9CEA  e35a       ld C,(HL)
-  9CEC  1776d1     ld HL,Tab_D176
+  9CEC  1776d1     ld HL,Tab_HeatAddByCode
   9CEF  e558       ld A,(HL+C)
   9CF1  d021       jr Z,L9D14
-  9CF3  41fa       set ($FA).1
+  9CF3  41fa       set (DotMask).1
   9CF5  d71f       jr F,L9D16
   9CF7  e0a87703   cmp ($A8),$03
   9CFB  d519       jr GT,L9D16
@@ -4209,14 +4223,14 @@ L9CDD:
   9D00  3300       ld B,$00
   9D02  ea1c       shlc C
   9D04  eb1e       rolc B
-  9D06  1476d2     ld WA,Tab_D276
+  9D06  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9D09  e931       add WA,BC
   9D0B  e817       ld HL,WA
   9D0D  e314       ld WA,(HL)
   9D0F  e0b917     ld HL,($B9)
   9D12  fb13       jr L9D27
 L9D14:
-  9D14  22f9       ld A,($F9)
+  9D14  22f9       ld A,(IdleCool)
 L9D16:
   9D16  e0b917     ld HL,($B9)
   9D19  e8df       test A.7
@@ -4235,16 +4249,16 @@ L9D27:
 L9D2D:
   9D2D  f0b910     ld ($B9),WA
   9D30  12         inc DE
-  9D31  2282       ld A,($82)
+  9D31  2282       ld A,(TileColumnX)
   9D33  01         swap A
   9D34  3100       ld W,$00
   9D36  ea31       add WA,DE
   9D38  e817       ld HL,WA
   9D3A  e35a       ld C,(HL)
-  9D3C  1776d1     ld HL,Tab_D176
+  9D3C  1776d1     ld HL,Tab_HeatAddByCode
   9D3F  e558       ld A,(HL+C)
   9D41  d021       jr Z,L9D64
-  9D43  42fa       set ($FA).2
+  9D43  42fa       set (DotMask).2
   9D45  d71f       jr F,L9D66
   9D47  e0a97703   cmp ($A9),$03
   9D4B  d519       jr GT,L9D66
@@ -4252,14 +4266,14 @@ L9D2D:
   9D50  3300       ld B,$00
   9D52  ea1c       shlc C
   9D54  eb1e       rolc B
-  9D56  1476d2     ld WA,Tab_D276
+  9D56  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9D59  e931       add WA,BC
   9D5B  e817       ld HL,WA
   9D5D  e314       ld WA,(HL)
   9D5F  e0bb17     ld HL,($BB)
   9D62  fb13       jr L9D77
 L9D64:
-  9D64  22f9       ld A,($F9)
+  9D64  22f9       ld A,(IdleCool)
 L9D66:
   9D66  e0bb17     ld HL,($BB)
   9D69  e8df       test A.7
@@ -4278,16 +4292,16 @@ L9D77:
 L9D7D:
   9D7D  f0bb10     ld ($BB),WA
   9D80  12         inc DE
-  9D81  2282       ld A,($82)
+  9D81  2282       ld A,(TileColumnX)
   9D83  01         swap A
   9D84  3100       ld W,$00
   9D86  ea31       add WA,DE
   9D88  e817       ld HL,WA
   9D8A  e35a       ld C,(HL)
-  9D8C  1776d1     ld HL,Tab_D176
+  9D8C  1776d1     ld HL,Tab_HeatAddByCode
   9D8F  e558       ld A,(HL+C)
   9D91  d021       jr Z,L9DB4
-  9D93  43fa       set ($FA).3
+  9D93  43fa       set (DotMask).3
   9D95  d71f       jr F,L9DB6
   9D97  e0aa7703   cmp ($AA),$03
   9D9B  d519       jr GT,L9DB6
@@ -4295,14 +4309,14 @@ L9D7D:
   9DA0  3300       ld B,$00
   9DA2  ea1c       shlc C
   9DA4  eb1e       rolc B
-  9DA6  1476d2     ld WA,Tab_D276
+  9DA6  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9DA9  e931       add WA,BC
   9DAB  e817       ld HL,WA
   9DAD  e314       ld WA,(HL)
   9DAF  e0bd17     ld HL,($BD)
   9DB2  fb13       jr L9DC7
 L9DB4:
-  9DB4  22f9       ld A,($F9)
+  9DB4  22f9       ld A,(IdleCool)
 L9DB6:
   9DB6  e0bd17     ld HL,($BD)
   9DB9  e8df       test A.7
@@ -4321,16 +4335,16 @@ L9DC7:
 L9DCD:
   9DCD  f0bd10     ld ($BD),WA
   9DD0  12         inc DE
-  9DD1  2282       ld A,($82)
+  9DD1  2282       ld A,(TileColumnX)
   9DD3  01         swap A
   9DD4  3100       ld W,$00
   9DD6  ea31       add WA,DE
   9DD8  e817       ld HL,WA
   9DDA  e35a       ld C,(HL)
-  9DDC  1776d1     ld HL,Tab_D176
+  9DDC  1776d1     ld HL,Tab_HeatAddByCode
   9DDF  e558       ld A,(HL+C)
   9DE1  d021       jr Z,L9E04
-  9DE3  44fa       set ($FA).4
+  9DE3  44fa       set (DotMask).4
   9DE5  d71f       jr F,L9E06
   9DE7  e0ab7703   cmp ($AB),$03
   9DEB  d519       jr GT,L9E06
@@ -4338,14 +4352,14 @@ L9DCD:
   9DF0  3300       ld B,$00
   9DF2  ea1c       shlc C
   9DF4  eb1e       rolc B
-  9DF6  1476d2     ld WA,Tab_D276
+  9DF6  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9DF9  e931       add WA,BC
   9DFB  e817       ld HL,WA
   9DFD  e314       ld WA,(HL)
   9DFF  e0bf17     ld HL,($BF)
   9E02  fb13       jr L9E17
 L9E04:
-  9E04  22f9       ld A,($F9)
+  9E04  22f9       ld A,(IdleCool)
 L9E06:
   9E06  e0bf17     ld HL,($BF)
   9E09  e8df       test A.7
@@ -4364,16 +4378,16 @@ L9E17:
 L9E1D:
   9E1D  f0bf10     ld ($BF),WA
   9E20  12         inc DE
-  9E21  2282       ld A,($82)
+  9E21  2282       ld A,(TileColumnX)
   9E23  01         swap A
   9E24  3100       ld W,$00
   9E26  ea31       add WA,DE
   9E28  e817       ld HL,WA
   9E2A  e35a       ld C,(HL)
-  9E2C  1776d1     ld HL,Tab_D176
+  9E2C  1776d1     ld HL,Tab_HeatAddByCode
   9E2F  e558       ld A,(HL+C)
   9E31  d021       jr Z,L9E54
-  9E33  45fa       set ($FA).5
+  9E33  45fa       set (DotMask).5
   9E35  d71f       jr F,L9E56
   9E37  e0ac7703   cmp ($AC),$03
   9E3B  d519       jr GT,L9E56
@@ -4381,14 +4395,14 @@ L9E1D:
   9E40  3300       ld B,$00
   9E42  ea1c       shlc C
   9E44  eb1e       rolc B
-  9E46  1476d2     ld WA,Tab_D276
+  9E46  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9E49  e931       add WA,BC
   9E4B  e817       ld HL,WA
   9E4D  e314       ld WA,(HL)
   9E4F  e0c117     ld HL,($C1)
   9E52  fb13       jr L9E67
 L9E54:
-  9E54  22f9       ld A,($F9)
+  9E54  22f9       ld A,(IdleCool)
 L9E56:
   9E56  e0c117     ld HL,($C1)
   9E59  e8df       test A.7
@@ -4407,16 +4421,16 @@ L9E67:
 L9E6D:
   9E6D  f0c110     ld ($C1),WA
   9E70  12         inc DE
-  9E71  2282       ld A,($82)
+  9E71  2282       ld A,(TileColumnX)
   9E73  01         swap A
   9E74  3100       ld W,$00
   9E76  ea31       add WA,DE
   9E78  e817       ld HL,WA
   9E7A  e35a       ld C,(HL)
-  9E7C  1776d1     ld HL,Tab_D176
+  9E7C  1776d1     ld HL,Tab_HeatAddByCode
   9E7F  e558       ld A,(HL+C)
   9E81  d021       jr Z,L9EA4
-  9E83  46fa       set ($FA).6
+  9E83  46fa       set (DotMask).6
   9E85  d71f       jr F,L9EA6
   9E87  e0ad7703   cmp ($AD),$03
   9E8B  d519       jr GT,L9EA6
@@ -4424,14 +4438,14 @@ L9E6D:
   9E90  3300       ld B,$00
   9E92  ea1c       shlc C
   9E94  eb1e       rolc B
-  9E96  1476d2     ld WA,Tab_D276
+  9E96  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9E99  e931       add WA,BC
   9E9B  e817       ld HL,WA
   9E9D  e314       ld WA,(HL)
   9E9F  e0c317     ld HL,($C3)
   9EA2  fb13       jr L9EB7
 L9EA4:
-  9EA4  22f9       ld A,($F9)
+  9EA4  22f9       ld A,(IdleCool)
 L9EA6:
   9EA6  e0c317     ld HL,($C3)
   9EA9  e8df       test A.7
@@ -4450,16 +4464,16 @@ L9EB7:
 L9EBD:
   9EBD  f0c310     ld ($C3),WA
   9EC0  12         inc DE
-  9EC1  2282       ld A,($82)
+  9EC1  2282       ld A,(TileColumnX)
   9EC3  01         swap A
   9EC4  3100       ld W,$00
   9EC6  ea31       add WA,DE
   9EC8  e817       ld HL,WA
   9ECA  e35a       ld C,(HL)
-  9ECC  1776d1     ld HL,Tab_D176
+  9ECC  1776d1     ld HL,Tab_HeatAddByCode
   9ECF  e558       ld A,(HL+C)
   9ED1  d021       jr Z,L9EF4
-  9ED3  47fa       set ($FA).7
+  9ED3  47fa       set (DotMask).7
   9ED5  d71f       jr F,L9EF6
   9ED7  e0ae7703   cmp ($AE),$03
   9EDB  d519       jr GT,L9EF6
@@ -4467,14 +4481,14 @@ L9EBD:
   9EE0  3300       ld B,$00
   9EE2  ea1c       shlc C
   9EE4  eb1e       rolc B
-  9EE6  1476d2     ld WA,Tab_D276
+  9EE6  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9EE9  e931       add WA,BC
   9EEB  e817       ld HL,WA
   9EED  e314       ld WA,(HL)
   9EEF  e0c517     ld HL,($C5)
   9EF2  fb13       jr L9F07
 L9EF4:
-  9EF4  22f9       ld A,($F9)
+  9EF4  22f9       ld A,(IdleCool)
 L9EF6:
   9EF6  e0c517     ld HL,($C5)
   9EF9  e8df       test A.7
@@ -4493,13 +4507,13 @@ L9F07:
 L9F0D:
   9F0D  f0c510     ld ($C5),WA
   9F10  12         inc DE
-  9F11  2282       ld A,($82)
+  9F11  2282       ld A,(TileColumnX)
   9F13  01         swap A
   9F14  3100       ld W,$00
   9F16  ea31       add WA,DE
   9F18  e817       ld HL,WA
   9F1A  e35a       ld C,(HL)
-  9F1C  1776d1     ld HL,Tab_D176
+  9F1C  1776d1     ld HL,Tab_HeatAddByCode
   9F1F  e558       ld A,(HL+C)
   9F21  d021       jr Z,L9F44
   9F23  40fb       set ($FB).0
@@ -4510,14 +4524,14 @@ L9F0D:
   9F30  3300       ld B,$00
   9F32  ea1c       shlc C
   9F34  eb1e       rolc B
-  9F36  1476d2     ld WA,Tab_D276
+  9F36  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9F39  e931       add WA,BC
   9F3B  e817       ld HL,WA
   9F3D  e314       ld WA,(HL)
   9F3F  e0c717     ld HL,($C7)
   9F42  fb13       jr L9F57
 L9F44:
-  9F44  22f9       ld A,($F9)
+  9F44  22f9       ld A,(IdleCool)
 L9F46:
   9F46  e0c717     ld HL,($C7)
   9F49  e8df       test A.7
@@ -4536,13 +4550,13 @@ L9F57:
 L9F5D:
   9F5D  f0c710     ld ($C7),WA
   9F60  12         inc DE
-  9F61  2282       ld A,($82)
+  9F61  2282       ld A,(TileColumnX)
   9F63  01         swap A
   9F64  3100       ld W,$00
   9F66  ea31       add WA,DE
   9F68  e817       ld HL,WA
   9F6A  e35a       ld C,(HL)
-  9F6C  1776d1     ld HL,Tab_D176
+  9F6C  1776d1     ld HL,Tab_HeatAddByCode
   9F6F  e558       ld A,(HL+C)
   9F71  d021       jr Z,L9F94
   9F73  41fb       set ($FB).1
@@ -4553,14 +4567,14 @@ L9F5D:
   9F80  3300       ld B,$00
   9F82  ea1c       shlc C
   9F84  eb1e       rolc B
-  9F86  1476d2     ld WA,Tab_D276
+  9F86  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9F89  e931       add WA,BC
   9F8B  e817       ld HL,WA
   9F8D  e314       ld WA,(HL)
   9F8F  e0c917     ld HL,($C9)
   9F92  fb13       jr L9FA7
 L9F94:
-  9F94  22f9       ld A,($F9)
+  9F94  22f9       ld A,(IdleCool)
 L9F96:
   9F96  e0c917     ld HL,($C9)
   9F99  e8df       test A.7
@@ -4579,13 +4593,13 @@ L9FA7:
 L9FAD:
   9FAD  f0c910     ld ($C9),WA
   9FB0  12         inc DE
-  9FB1  2282       ld A,($82)
+  9FB1  2282       ld A,(TileColumnX)
   9FB3  01         swap A
   9FB4  3100       ld W,$00
   9FB6  ea31       add WA,DE
   9FB8  e817       ld HL,WA
   9FBA  e35a       ld C,(HL)
-  9FBC  1776d1     ld HL,Tab_D176
+  9FBC  1776d1     ld HL,Tab_HeatAddByCode
   9FBF  e558       ld A,(HL+C)
   9FC1  d021       jr Z,L9FE4
   9FC3  42fb       set ($FB).2
@@ -4596,14 +4610,14 @@ L9FAD:
   9FD0  3300       ld B,$00
   9FD2  ea1c       shlc C
   9FD4  eb1e       rolc B
-  9FD6  1476d2     ld WA,Tab_D276
+  9FD6  1476d2     ld WA,Tab_HeatAddFreshByTemp
   9FD9  e931       add WA,BC
   9FDB  e817       ld HL,WA
   9FDD  e314       ld WA,(HL)
   9FDF  e0cb17     ld HL,($CB)
   9FE2  fb13       jr L9FF7
 L9FE4:
-  9FE4  22f9       ld A,($F9)
+  9FE4  22f9       ld A,(IdleCool)
 L9FE6:
   9FE6  e0cb17     ld HL,($CB)
   9FE9  e8df       test A.7
@@ -4622,13 +4636,13 @@ L9FF7:
 L9FFD:
   9FFD  f0cb10     ld ($CB),WA
   A000  12         inc DE
-  A001  2282       ld A,($82)
+  A001  2282       ld A,(TileColumnX)
   A003  01         swap A
   A004  3100       ld W,$00
   A006  ea31       add WA,DE
   A008  e817       ld HL,WA
   A00A  e35a       ld C,(HL)
-  A00C  1776d1     ld HL,Tab_D176
+  A00C  1776d1     ld HL,Tab_HeatAddByCode
   A00F  e558       ld A,(HL+C)
   A011  d021       jr Z,LA034
   A013  43fb       set ($FB).3
@@ -4639,14 +4653,14 @@ L9FFD:
   A020  3300       ld B,$00
   A022  ea1c       shlc C
   A024  eb1e       rolc B
-  A026  1476d2     ld WA,Tab_D276
+  A026  1476d2     ld WA,Tab_HeatAddFreshByTemp
   A029  e931       add WA,BC
   A02B  e817       ld HL,WA
   A02D  e314       ld WA,(HL)
   A02F  e0cd17     ld HL,($CD)
   A032  fb13       jr LA047
 LA034:
-  A034  22f9       ld A,($F9)
+  A034  22f9       ld A,(IdleCool)
 LA036:
   A036  e0cd17     ld HL,($CD)
   A039  e8df       test A.7
@@ -4665,13 +4679,13 @@ LA047:
 LA04D:
   A04D  f0cd10     ld ($CD),WA
   A050  12         inc DE
-  A051  2282       ld A,($82)
+  A051  2282       ld A,(TileColumnX)
   A053  01         swap A
   A054  3100       ld W,$00
   A056  ea31       add WA,DE
   A058  e817       ld HL,WA
   A05A  e35a       ld C,(HL)
-  A05C  1776d1     ld HL,Tab_D176
+  A05C  1776d1     ld HL,Tab_HeatAddByCode
   A05F  e558       ld A,(HL+C)
   A061  d021       jr Z,LA084
   A063  44fb       set ($FB).4
@@ -4682,14 +4696,14 @@ LA04D:
   A070  3300       ld B,$00
   A072  ea1c       shlc C
   A074  eb1e       rolc B
-  A076  1476d2     ld WA,Tab_D276
+  A076  1476d2     ld WA,Tab_HeatAddFreshByTemp
   A079  e931       add WA,BC
   A07B  e817       ld HL,WA
   A07D  e314       ld WA,(HL)
   A07F  e0cf17     ld HL,($CF)
   A082  fb13       jr LA097
 LA084:
-  A084  22f9       ld A,($F9)
+  A084  22f9       ld A,(IdleCool)
 LA086:
   A086  e0cf17     ld HL,($CF)
   A089  e8df       test A.7
@@ -4708,13 +4722,13 @@ LA097:
 LA09D:
   A09D  f0cf10     ld ($CF),WA
   A0A0  12         inc DE
-  A0A1  2282       ld A,($82)
+  A0A1  2282       ld A,(TileColumnX)
   A0A3  01         swap A
   A0A4  3100       ld W,$00
   A0A6  ea31       add WA,DE
   A0A8  e817       ld HL,WA
   A0AA  e35a       ld C,(HL)
-  A0AC  1776d1     ld HL,Tab_D176
+  A0AC  1776d1     ld HL,Tab_HeatAddByCode
   A0AF  e558       ld A,(HL+C)
   A0B1  d021       jr Z,LA0D4
   A0B3  45fb       set ($FB).5
@@ -4725,14 +4739,14 @@ LA09D:
   A0C0  3300       ld B,$00
   A0C2  ea1c       shlc C
   A0C4  eb1e       rolc B
-  A0C6  1476d2     ld WA,Tab_D276
+  A0C6  1476d2     ld WA,Tab_HeatAddFreshByTemp
   A0C9  e931       add WA,BC
   A0CB  e817       ld HL,WA
   A0CD  e314       ld WA,(HL)
   A0CF  e0d117     ld HL,($D1)
   A0D2  fb13       jr LA0E7
 LA0D4:
-  A0D4  22f9       ld A,($F9)
+  A0D4  22f9       ld A,(IdleCool)
 LA0D6:
   A0D6  e0d117     ld HL,($D1)
   A0D9  e8df       test A.7
@@ -4751,13 +4765,13 @@ LA0E7:
 LA0ED:
   A0ED  f0d110     ld ($D1),WA
   A0F0  12         inc DE
-  A0F1  2282       ld A,($82)
+  A0F1  2282       ld A,(TileColumnX)
   A0F3  01         swap A
   A0F4  3100       ld W,$00
   A0F6  ea31       add WA,DE
   A0F8  e817       ld HL,WA
   A0FA  e35a       ld C,(HL)
-  A0FC  1776d1     ld HL,Tab_D176
+  A0FC  1776d1     ld HL,Tab_HeatAddByCode
   A0FF  e558       ld A,(HL+C)
   A101  d021       jr Z,LA124
   A103  46fb       set ($FB).6
@@ -4768,14 +4782,14 @@ LA0ED:
   A110  3300       ld B,$00
   A112  ea1c       shlc C
   A114  eb1e       rolc B
-  A116  1476d2     ld WA,Tab_D276
+  A116  1476d2     ld WA,Tab_HeatAddFreshByTemp
   A119  e931       add WA,BC
   A11B  e817       ld HL,WA
   A11D  e314       ld WA,(HL)
   A11F  e0d317     ld HL,($D3)
   A122  fb13       jr LA137
 LA124:
-  A124  22f9       ld A,($F9)
+  A124  22f9       ld A,(IdleCool)
 LA126:
   A126  e0d317     ld HL,($D3)
   A129  e8df       test A.7
@@ -4794,13 +4808,13 @@ LA137:
 LA13D:
   A13D  f0d310     ld ($D3),WA
   A140  12         inc DE
-  A141  2282       ld A,($82)
+  A141  2282       ld A,(TileColumnX)
   A143  01         swap A
   A144  3100       ld W,$00
   A146  ea31       add WA,DE
   A148  e817       ld HL,WA
   A14A  e35a       ld C,(HL)
-  A14C  1776d1     ld HL,Tab_D176
+  A14C  1776d1     ld HL,Tab_HeatAddByCode
   A14F  e558       ld A,(HL+C)
   A151  d021       jr Z,LA174
   A153  47fb       set ($FB).7
@@ -4811,14 +4825,14 @@ LA13D:
   A160  3300       ld B,$00
   A162  ea1c       shlc C
   A164  eb1e       rolc B
-  A166  1476d2     ld WA,Tab_D276
+  A166  1476d2     ld WA,Tab_HeatAddFreshByTemp
   A169  e931       add WA,BC
   A16B  e817       ld HL,WA
   A16D  e314       ld WA,(HL)
   A16F  e0d517     ld HL,($D5)
   A172  fb13       jr LA187
 LA174:
-  A174  22f9       ld A,($F9)
+  A174  22f9       ld A,(IdleCool)
 LA176:
   A176  e0d517     ld HL,($D5)
   A179  e8df       test A.7
@@ -4836,19 +4850,23 @@ LA187:
   A18A  14ffff     ld WA,$FFFF
 LA18D:
   A18D  f0d510     ld ($D5),WA
-  A190  2082       inc ($82)
-  A192  e0827708   cmp ($82),$08
+  A190  2082       inc (TileColumnX)
+  A192  e0827708   cmp (TileColumnX),$08
   A196  d303       jr CC,LA19B
-  A198  fe2998     jp Line_BuildColumnB
+  A198  fe2998     jp Line_NextColumnB
 LA19B:
   A19B  4170       set (MechFlags).1   ; LineFetch
-LA19D:
-  A19D  28f8       dec (BandColumns)
-  A19F  d003       jr Z,LA1A4
+
+Line_TileColumnDone:
+; [C] after 8 pixel columns: next tile column; after 20, a new band
+  A19D  28f8       dec (TileColumnsLeft)
+  A19F  d003       jr Z,Heat_BandStart
   A1A1  fe9da2     jp Main_RefillLineBuf
-LA1A4:
-  A1A4  2cf814     ld (BandColumns),$14
-  A1A7  2ea7       clr ($A7)
+
+Heat_BandStart:
+; [C] new band: clear RowHistory, RowHeat -= Tab_BandCoolByTemp[temperature]
+  A1A4  2cf814     ld (TileColumnsLeft),$14
+  A1A7  2ea7       clr (RowHistory)
   A1A9  2ea8       clr ($A8)
   A1AB  2ea9       clr ($A9)
   A1AD  2eaa       clr ($AA)
@@ -4864,7 +4882,7 @@ LA1A4:
   A1C1  2eb4       clr ($B4)
   A1C3  2eb5       clr ($B5)
   A1C5  2eb6       clr ($B6)
-  A1C7  1476d8     ld WA,Tab_D876
+  A1C7  1476d8     ld WA,Tab_BandCoolByTemp
   A1CA  e0fd5a     ld C,(TempAdc)
   A1CD  3300       ld B,$00
   A1CF  ea1c       shlc C
@@ -4872,12 +4890,12 @@ LA1A4:
   A1D3  e931       add WA,BC
   A1D5  e817       ld HL,WA
   A1D7  e315       ld BC,(HL)
-  A1D9  e0b714     ld WA,($B7)
+  A1D9  e0b714     ld WA,(RowHeat)
   A1DC  e933       sub WA,BC
   A1DE  a2         jrs F,LA1E2
   A1DF  140000     ld WA,$0000
 LA1E2:
-  A1E2  f0b710     ld ($B7),WA
+  A1E2  f0b710     ld (RowHeat),WA
   A1E5  e0b914     ld WA,($B9)
   A1E8  e933       sub WA,BC
   A1EA  a2         jrs F,LA1EE
@@ -4968,7 +4986,7 @@ LA28A:
   A293  140000     ld WA,$0000
 LA296:
   A296  f0d510     ld ($D5),WA
-  A299  24fa0000   ldw ($FA),$0000
+  A299  24fa0000   ldw (DotMask),$0000
 
 Main_RefillLineBuf:
 ; [C] copy 32-byte chunks from SRAM into LineBuf while printing
@@ -5191,7 +5209,7 @@ LA45D:
   A45D  05         ret
 
 Sub_PrimeLineBuf:
-; [I] clear LineBuf and preload 0x120 bytes from SRAM
+; [C] clear LineBuf and preload 0x120 bytes from SRAM (LineBufWr = 0x0220, LineBufRd = 0x0100)
   A45E  2c0207     ld (P2),$07
   A461  2c0d00     ld (P7CR),$00
   A464  170001     ld HL,LineBuf
@@ -5566,9 +5584,9 @@ LAB2F:
   AB41  e0725a     ld C,(LineCounter)
   AB44  6a         dec C
   AB45  e558       ld A,(HL+C)
-  AB47  171e04     ld HL,BlankColumns
+  AB47  171e04     ld HL,HeatSoak
   AB4A  e35a       ld C,(HL)
-  AB4C  175cdd     ld HL,Tab_HeatTrim
+  AB4C  175cdd     ld HL,Tab_TickTrimBySoak
   AB4F  e57b       sub A,(HL+C)
   AB51  3100       ld W,$00
   AB53  f01010     ld (TREG1A),WA
@@ -5614,10 +5632,10 @@ Mech_Dispatch:
   ABA1  69b3       dw Mech_StateInvalid
 
 Mech_State00_Idle:
-; [I] idle: counts PowerOffTimer and clears P5.3 (power hold) when it overflows
+; [C] encoder pulse with no job: while idle, count EncoderIdleCount; on overflow (27 pulses) clear P5.3
   ABA3  df71       test (SysFlags).7   ; Idle
   ABA5  86         jrs T,LABAD
-  ABA6  171804     ld HL,PowerOffTimer
+  ABA6  171804     ld HL,EncoderIdleCount
   ABA9  21         inc (HL)
   ABAA  a1         jrs F,LABAD
   ABAB  4b05       clr (P5).3
@@ -5626,15 +5644,15 @@ LABAD:
 
 Mech_State01_Column:
 ; [C] print states 01-10: one pixel column per state, 16 states per cycle, 10 cycles per band
-  ABAE  22fc       ld A,($FC)
+  ABAE  22fc       ld A,(BandIndex)
   ABB0  1c         shlc A
   ABB1  3100       ld W,$00
-  ABB3  dada       test (RxErrFlags).2   ; BlankLine
+  ABB3  dada       test (RxErrFlags).2   ; ColdHead
   ABB5  85         jrs T,LABBC
-  ABB6  e83969dc   add WA,Tab_DC69
+  ABB6  e83969dc   add WA,Tab_TickCurvePtrsCold
   ABBA  fb04       jr LABC0
 LABBC:
-  ABBC  e83976db   add WA,Tab_DB76
+  ABBC  e83976db   add WA,Tab_TickCurvePtrsWarm
 LABC0:
   ABC0  e817       ld HL,WA
   ABC2  e316       ld DE,(HL)
@@ -6005,7 +6023,7 @@ Mech_State10_Column:
   AF60  2072       inc (LineCounter)
   AF62  e0727717   cmp (LineCounter),$17
   AF66  d33d       jr CC,LAFA5
-  AF68  166002     ld DE,$0260
+  AF68  166002     ld DE,ColumnCodes
   AF6B  fcbebe     call StrobeA_Row00
   AF6E  fc1dbf     call StrobeA_Row01
   AF71  fc7cbf     call StrobeA_Row02
@@ -6086,8 +6104,8 @@ LB00F:
   B01B  243a10fd   ldw (EIR),$FD10
   B01F  04         reti
 LB020:
-  B020  20fc       inc ($FC)
-  B022  166002     ld DE,$0260
+  B020  20fc       inc (BandIndex)
+  B022  166002     ld DE,ColumnCodes
   B025  fcbebe     call StrobeA_Row00
   B028  fc1dbf     call StrobeA_Row01
   B02B  fc7cbf     call StrobeA_Row02
@@ -7443,7 +7461,7 @@ Rx_WaitByte:
   B9C1  04         reti
 
 Line_CopyColumnSource:
-; [I]
+; [C] copy the 32 bytes (2 stacked tiles x 16 rows x 2 planes) of the tile column being printed
   B9C2  174002     ld HL,ColumnSource
   B9C5  e227       ld (HL),(DE)
   B9C7  13         inc HL
@@ -7548,11 +7566,11 @@ LBA4D:
   BA50  05         ret
 
 Line_ExtractColumn:
-; [I] one bit position of the source bytes = one pixel column
-  BA51  178700     ld HL,$0087
+; [C] pixel x = TileColumnX of each of the 16 rows -> ColumnPixels (0-3); ends with the palette remap
+  BA51  178700     ld HL,ColumnPixels
   BA54  164002     ld DE,ColumnSource
   BA57  3007       ld A,$07
-  BA59  e0825a     ld C,($82)
+  BA59  e0825a     ld C,(TileColumnX)
   BA5C  ea63       sub A,C
   BA5E  e89e       test (DE).A
   BA60  e3c8       ld (HL).0,CF
@@ -7667,7 +7685,7 @@ Line_ExtractColumn:
   BB13  5d         ld D,A
   BB14  e0ff5c     ld E,(Palette)
   BB17  ec7403     and E,$03
-  BB1A  178700     ld HL,$0087
+  BB1A  178700     ld HL,ColumnPixels
 LBB1D:
   BB1D  23         ld A,(HL)
   BB1E  7703       cmp A,$03
@@ -7692,13 +7710,13 @@ LBB32:
 LBB38:
   BB38  05         ret
 
-Line_ColumnDots:
-; [I] combine the two bit planes into dot values (table 0xCCB6)
-  BB39  17b6cc     ld HL,Tab_PlaneCombine
-  BB3C  2287       ld A,($87)
-  BB3E  e0a708     rold A,($A7)
-  BB41  e0a75a     ld C,($A7)
-  BB44  e52697     ld ($97),(HL+C)
+Line_ColumnHistory:
+; [C] RowHistory = previous dot << 4 | current dot; ColumnHistCode = Tab_EnergyByHistory[RowHistory]
+  BB39  17b6cc     ld HL,Tab_EnergyByHistory
+  BB3C  2287       ld A,(ColumnPixels)
+  BB3E  e0a708     rold A,(RowHistory)
+  BB41  e0a75a     ld C,(RowHistory)
+  BB44  e52697     ld (ColumnHistCode),(HL+C)
   BB47  2288       ld A,($88)
   BB49  e0a808     rold A,($A8)
   BB4C  e0a85a     ld C,($A8)
@@ -7761,23 +7779,23 @@ Line_ColumnDots:
   BBE9  e526a6     ld ($A6),(HL+C)
   BBEC  05         ret
 
-Line_ColumnHeat:
-; [I]
-  BBED  2282       ld A,($82)
+Line_ColumnEnergy:
+; [C] code = HeatTime + Tab_HeatCorr<grey>[RowHeatInt] + ColumnHistCode, clamped 0-0x64, into ColumnCodes
+  BBED  2282       ld A,(TileColumnX)
   BBEF  01         swap A
   BBF0  3100       ld W,$00
   BBF2  ea31       add WA,DE
   BBF4  e816       ld DE,WA
-  BBF6  2287       ld A,($87)
+  BBF6  2287       ld A,(ColumnPixels)
   BBF8  1c         shlc A
   BBF9  5a         ld C,A
-  BBFA  17b6be     ld HL,Tab_ColumnTabPtrs
+  BBFA  17b6be     ld HL,Tab_HeatCorrPtrs
   BBFD  e517       ld HL,(HL+C)
-  BBFF  2260       ld A,(ColumnDots)
+  BBFF  2260       ld A,(RowHeatInt)
   BC01  3100       ld W,$00
   BC03  eb31       add WA,HL
   BC05  e817       ld HL,WA
-  BC07  e09759     ld W,($97)
+  BC07  e09759     ld W,(ColumnHistCode)
   BC0A  2278       ld A,(HeatTime)
   BC0C  e379       add A,(HL)
   BC0E  e8df       test A.7
@@ -7797,7 +7815,7 @@ LBC1F:
   BC22  2288       ld A,($88)
   BC24  1c         shlc A
   BC25  5a         ld C,A
-  BC26  17b6be     ld HL,Tab_ColumnTabPtrs
+  BC26  17b6be     ld HL,Tab_HeatCorrPtrs
   BC29  e517       ld HL,(HL+C)
   BC2B  2261       ld A,($61)
   BC2D  3100       ld W,$00
@@ -7823,7 +7841,7 @@ LBC4B:
   BC4E  2289       ld A,($89)
   BC50  1c         shlc A
   BC51  5a         ld C,A
-  BC52  17b6be     ld HL,Tab_ColumnTabPtrs
+  BC52  17b6be     ld HL,Tab_HeatCorrPtrs
   BC55  e517       ld HL,(HL+C)
   BC57  2262       ld A,($62)
   BC59  3100       ld W,$00
@@ -7849,7 +7867,7 @@ LBC77:
   BC7A  228a       ld A,($8A)
   BC7C  1c         shlc A
   BC7D  5a         ld C,A
-  BC7E  17b6be     ld HL,Tab_ColumnTabPtrs
+  BC7E  17b6be     ld HL,Tab_HeatCorrPtrs
   BC81  e517       ld HL,(HL+C)
   BC83  2263       ld A,($63)
   BC85  3100       ld W,$00
@@ -7875,7 +7893,7 @@ LBCA3:
   BCA6  228b       ld A,($8B)
   BCA8  1c         shlc A
   BCA9  5a         ld C,A
-  BCAA  17b6be     ld HL,Tab_ColumnTabPtrs
+  BCAA  17b6be     ld HL,Tab_HeatCorrPtrs
   BCAD  e517       ld HL,(HL+C)
   BCAF  2264       ld A,($64)
   BCB1  3100       ld W,$00
@@ -7901,7 +7919,7 @@ LBCCF:
   BCD2  228c       ld A,($8C)
   BCD4  1c         shlc A
   BCD5  5a         ld C,A
-  BCD6  17b6be     ld HL,Tab_ColumnTabPtrs
+  BCD6  17b6be     ld HL,Tab_HeatCorrPtrs
   BCD9  e517       ld HL,(HL+C)
   BCDB  2265       ld A,($65)
   BCDD  3100       ld W,$00
@@ -7927,7 +7945,7 @@ LBCFB:
   BCFE  228d       ld A,($8D)
   BD00  1c         shlc A
   BD01  5a         ld C,A
-  BD02  17b6be     ld HL,Tab_ColumnTabPtrs
+  BD02  17b6be     ld HL,Tab_HeatCorrPtrs
   BD05  e517       ld HL,(HL+C)
   BD07  2266       ld A,($66)
   BD09  3100       ld W,$00
@@ -7953,7 +7971,7 @@ LBD27:
   BD2A  228e       ld A,($8E)
   BD2C  1c         shlc A
   BD2D  5a         ld C,A
-  BD2E  17b6be     ld HL,Tab_ColumnTabPtrs
+  BD2E  17b6be     ld HL,Tab_HeatCorrPtrs
   BD31  e517       ld HL,(HL+C)
   BD33  2267       ld A,($67)
   BD35  3100       ld W,$00
@@ -7979,7 +7997,7 @@ LBD53:
   BD56  228f       ld A,($8F)
   BD58  1c         shlc A
   BD59  5a         ld C,A
-  BD5A  17b6be     ld HL,Tab_ColumnTabPtrs
+  BD5A  17b6be     ld HL,Tab_HeatCorrPtrs
   BD5D  e517       ld HL,(HL+C)
   BD5F  2268       ld A,($68)
   BD61  3100       ld W,$00
@@ -8005,7 +8023,7 @@ LBD7F:
   BD82  2290       ld A,($90)
   BD84  1c         shlc A
   BD85  5a         ld C,A
-  BD86  17b6be     ld HL,Tab_ColumnTabPtrs
+  BD86  17b6be     ld HL,Tab_HeatCorrPtrs
   BD89  e517       ld HL,(HL+C)
   BD8B  2269       ld A,($69)
   BD8D  3100       ld W,$00
@@ -8031,7 +8049,7 @@ LBDAB:
   BDAE  2291       ld A,($91)
   BDB0  1c         shlc A
   BDB1  5a         ld C,A
-  BDB2  17b6be     ld HL,Tab_ColumnTabPtrs
+  BDB2  17b6be     ld HL,Tab_HeatCorrPtrs
   BDB5  e517       ld HL,(HL+C)
   BDB7  226a       ld A,($6A)
   BDB9  3100       ld W,$00
@@ -8057,7 +8075,7 @@ LBDD7:
   BDDA  2292       ld A,($92)
   BDDC  1c         shlc A
   BDDD  5a         ld C,A
-  BDDE  17b6be     ld HL,Tab_ColumnTabPtrs
+  BDDE  17b6be     ld HL,Tab_HeatCorrPtrs
   BDE1  e517       ld HL,(HL+C)
   BDE3  226b       ld A,($6B)
   BDE5  3100       ld W,$00
@@ -8083,7 +8101,7 @@ LBE03:
   BE06  2293       ld A,($93)
   BE08  1c         shlc A
   BE09  5a         ld C,A
-  BE0A  17b6be     ld HL,Tab_ColumnTabPtrs
+  BE0A  17b6be     ld HL,Tab_HeatCorrPtrs
   BE0D  e517       ld HL,(HL+C)
   BE0F  226c       ld A,($6C)
   BE11  3100       ld W,$00
@@ -8109,7 +8127,7 @@ LBE2F:
   BE32  2294       ld A,($94)
   BE34  1c         shlc A
   BE35  5a         ld C,A
-  BE36  17b6be     ld HL,Tab_ColumnTabPtrs
+  BE36  17b6be     ld HL,Tab_HeatCorrPtrs
   BE39  e517       ld HL,(HL+C)
   BE3B  226d       ld A,($6D)
   BE3D  3100       ld W,$00
@@ -8135,7 +8153,7 @@ LBE5B:
   BE5E  2295       ld A,($95)
   BE60  1c         shlc A
   BE61  5a         ld C,A
-  BE62  17b6be     ld HL,Tab_ColumnTabPtrs
+  BE62  17b6be     ld HL,Tab_HeatCorrPtrs
   BE65  e517       ld HL,(HL+C)
   BE67  226e       ld A,($6E)
   BE69  3100       ld W,$00
@@ -8161,7 +8179,7 @@ LBE87:
   BE8A  2296       ld A,($96)
   BE8C  1c         shlc A
   BE8D  5a         ld C,A
-  BE8E  17b6be     ld HL,Tab_ColumnTabPtrs
+  BE8E  17b6be     ld HL,Tab_HeatCorrPtrs
   BE91  e517       ld HL,(HL+C)
   BE93  226f       ld A,($6F)
   BE95  3100       ld W,$00
@@ -8185,8 +8203,8 @@ LBEB3:
   BEB3  f250       ld (DE),A
   BEB5  05         ret
 
-Tab_ColumnTabPtrs:
-; [I] 4 pointers: 0xD476, 0xD576, 0xD676, 0xD776 (used at 8FC6, 8FF2, 901E)
+Tab_HeatCorrPtrs:
+; [C] pointers to Tab_HeatCorr0-3, by grey level
 ; words BEB6-BEBD: [I] Tab_ColumnTabPtrs
   BEB6  76d476d576d676d7                 dw $D476, $D576, $D676, $D776
 
@@ -10366,16 +10384,16 @@ JCCB3:
 JCCB5:
   CCB5  05         ret
 
-Tab_PlaneCombine:
-; [?] 64 bytes used by Line_ColumnDots
-; bytes CCB6-CCF5: [?] Tab_PlaneCombine
+Tab_EnergyByHistory:
+; [C] energy code by (previous dot, current dot), index prev*16+cur: white 0; black after white 0x6B, after black 0x4A
+; bytes CCB6-CCF5: [C] Tab_EnergyByHistory (rows = previous dot)
   CCB6  003b526b000000000000000000000000 db $00, $3B, $52, $6B, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   CCC6  00294565000000000000000000000000 db $00, $29, $45, $65, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   CCD6  00253660000000000000000000000000 db $00, $25, $36, $60, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   CCE6  00212b4a000000000000000000000000 db $00, $21, $2B, $4A, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
 
 Tab_DotTicks:
-; [C] pairs (first tick, tick count) per dot value, used by the Strobe_* routines
+; [C] 256 pairs (first tick, tick count) by energy code: the dot's on-window inside the 33-tick burst
 ; bytes CCF6-CEF5: [C] Tab_DotTicks
   CCF6  00000000000000001001100110010f02 db $00, $00, $00, $00, $00, $00, $00, $00, $10, $01, $10, $01, $10, $01, $0F, $02
   CD06  0f020f020f030f030f030e040e040e04 db $0F, $02, $0F, $02, $0F, $03, $0F, $03, $0F, $03, $0E, $04, $0E, $04, $0E, $04
@@ -10442,8 +10460,8 @@ Tab_ExposureOffset:
   D056  fdfdfdfdfefefefefefefefeffffffff db $FD, $FD, $FD, $FD, $FE, $FE, $FE, $FE, $FE, $FE, $FE, $FE, $FF, $FF, $FF, $FF
   D066  ffffffff000000000000000001010101 db $FF, $FF, $FF, $FF, $00, $00, $00, $00, $00, $00, $00, $00, $01, $01, $01, $01
 
-Tab_ParamByTemp:
-; [I] 256 bytes by temperature reading -> 0xF9
+Tab_IdleCoolByTemp:
+; [C] signed heat change per column of a white dot, by temperature (-> 0xF9)
 ; bytes D076-D175: [I] Tab_ParamByTemp
   D076  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   D086  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
@@ -10462,8 +10480,8 @@ Tab_ParamByTemp:
   D156  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   D166  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
 
-Tab_D176:
-; [?] used by Line_PrepareBand
+Tab_HeatAddByCode:
+; [C] heat added per column by a continuing dot, by energy code
   D176  00010101010101010101010101010101 db $00, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01
   D186  01010101010101010101010101010102 db $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $02
   D196  02020202020202020202020202020202 db $02, $02, $02, $02, $02, $02, $02, $02, $02, $02, $02, $02, $02, $02, $02, $02
@@ -10481,46 +10499,44 @@ Tab_D176:
   D256  04040404040404040404040404040404 db $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04
   D266  04040404040404040404040404040404 db $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04, $04
 
-Tab_D276:
-; [?] used by Line_PrepareBand
-  D276  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D286  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D296  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D2A6  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D2B6  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D2C6  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D2D6  00000000000000000000fa00fa00fa00 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $FA, $00, $FA, $00, $FA, $00
-  D2E6  fa00fa00f000f000f000f000e600e600 db $FA, $00, $FA, $00, $F0, $00, $F0, $00, $F0, $00, $F0, $00, $E6, $00, $E6, $00
-  D2F6  e600dc00dc00dc00dc00d200d200d200 db $E6, $00, $DC, $00, $DC, $00, $DC, $00, $DC, $00, $D2, $00, $D2, $00, $D2, $00
-  D306  d200c800c800c800c800be00be00be00 db $D2, $00, $C8, $00, $C8, $00, $C8, $00, $C8, $00, $BE, $00, $BE, $00, $BE, $00
-  D316  be00be00b400b400b400b400b400aa00 db $BE, $00, $BE, $00, $B4, $00, $B4, $00, $B4, $00, $B4, $00, $B4, $00, $AA, $00
-  D326  aa00aa00aa00aa00a000a000a000a000 db $AA, $00, $AA, $00, $AA, $00, $AA, $00, $A0, $00, $A0, $00, $A0, $00, $A0, $00
-  D336  a000960096009600960096008c008c00 db $A0, $00, $96, $00, $96, $00, $96, $00, $96, $00, $96, $00, $8C, $00, $8C, $00
-  D346  8c008c008c008c008200820082008200 db $8C, $00, $8C, $00, $8C, $00, $8C, $00, $82, $00, $82, $00, $82, $00, $82, $00
-  D356  82008200780078007800780078007800 db $82, $00, $82, $00, $78, $00, $78, $00, $78, $00, $78, $00, $78, $00, $78, $00
-  D366  780078006e006e006e006e006e006e00 db $78, $00, $78, $00, $6E, $00, $6E, $00, $6E, $00, $6E, $00, $6E, $00, $6E, $00
+Tab_HeatAddFreshByTemp:
+; [C] 256 words: heat added by a dot that follows a white one, by temperature
+; words D276-D475: [C] Tab_HeatAddFreshByTemp
+  D276  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D286  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D296  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D2A6  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D2B6  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D2C6  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D2D6  00000000000000000000fa00fa00fa00 dw $0000, $0000, $0000, $0000, $0000, $00FA, $00FA, $00FA
+  D2E6  fa00fa00f000f000f000f000e600e600 dw $00FA, $00FA, $00F0, $00F0, $00F0, $00F0, $00E6, $00E6
+  D2F6  e600dc00dc00dc00dc00d200d200d200 dw $00E6, $00DC, $00DC, $00DC, $00DC, $00D2, $00D2, $00D2
+  D306  d200c800c800c800c800be00be00be00 dw $00D2, $00C8, $00C8, $00C8, $00C8, $00BE, $00BE, $00BE
+  D316  be00be00b400b400b400b400b400aa00 dw $00BE, $00BE, $00B4, $00B4, $00B4, $00B4, $00B4, $00AA
+  D326  aa00aa00aa00aa00a000a000a000a000 dw $00AA, $00AA, $00AA, $00AA, $00A0, $00A0, $00A0, $00A0
+  D336  a000960096009600960096008c008c00 dw $00A0, $0096, $0096, $0096, $0096, $0096, $008C, $008C
+  D346  8c008c008c008c008200820082008200 dw $008C, $008C, $008C, $008C, $0082, $0082, $0082, $0082
+  D356  82008200780078007800780078007800 dw $0082, $0082, $0078, $0078, $0078, $0078, $0078, $0078
+  D366  780078006e006e006e006e006e006e00 dw $0078, $0078, $006E, $006E, $006E, $006E, $006E, $006E
+  D376  64006400640064006400640064006400 dw $0064, $0064, $0064, $0064, $0064, $0064, $0064, $0064
+  D386  64006400640064003200320032003200 dw $0064, $0064, $0064, $0064, $0032, $0032, $0032, $0032
+  D396  32003200320032003200320032003200 dw $0032, $0032, $0032, $0032, $0032, $0032, $0032, $0032
+  D3A6  32002800280028002800280028002800 dw $0032, $0028, $0028, $0028, $0028, $0028, $0028, $0028
+  D3B6  2800280028001e001e001e001e001e00 dw $0028, $0028, $0028, $001E, $001E, $001E, $001E, $001E
+  D3C6  1e001e001e001e001e001e0014001400 dw $001E, $001E, $001E, $001E, $001E, $001E, $0014, $0014
+  D3D6  14001400140014001400140014001400 dw $0014, $0014, $0014, $0014, $0014, $0014, $0014, $0014
+  D3E6  140014000a000a000a000a000a000a00 dw $0014, $0014, $000A, $000A, $000A, $000A, $000A, $000A
+  D3F6  0a000a000a000a000a000a000a000a00 dw $000A, $000A, $000A, $000A, $000A, $000A, $000A, $000A
+  D406  0a000a000a000a000a000a000a000a00 dw $000A, $000A, $000A, $000A, $000A, $000A, $000A, $000A
+  D416  0a000a000a000a000a000a000a000a00 dw $000A, $000A, $000A, $000A, $000A, $000A, $000A, $000A
+  D426  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D436  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D446  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D456  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D466  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
 
-Tab_D376:
-; [?]
-  D376  64006400640064006400640064006400 db $64, $00, $64, $00, $64, $00, $64, $00, $64, $00, $64, $00, $64, $00, $64, $00
-  D386  64006400640064003200320032003200 db $64, $00, $64, $00, $64, $00, $64, $00, $32, $00, $32, $00, $32, $00, $32, $00
-  D396  32003200320032003200320032003200 db $32, $00, $32, $00, $32, $00, $32, $00, $32, $00, $32, $00, $32, $00, $32, $00
-  D3A6  32002800280028002800280028002800 db $32, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00
-  D3B6  2800280028001e001e001e001e001e00 db $28, $00, $28, $00, $28, $00, $1E, $00, $1E, $00, $1E, $00, $1E, $00, $1E, $00
-  D3C6  1e001e001e001e001e001e0014001400 db $1E, $00, $1E, $00, $1E, $00, $1E, $00, $1E, $00, $1E, $00, $14, $00, $14, $00
-  D3D6  14001400140014001400140014001400 db $14, $00, $14, $00, $14, $00, $14, $00, $14, $00, $14, $00, $14, $00, $14, $00
-  D3E6  140014000a000a000a000a000a000a00 db $14, $00, $14, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00
-  D3F6  0a000a000a000a000a000a000a000a00 db $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00
-  D406  0a000a000a000a000a000a000a000a00 db $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00
-  D416  0a000a000a000a000a000a000a000a00 db $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00, $0A, $00
-  D426  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D436  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D446  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D456  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D466  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-
-Tab_D476:
-; [?] via Tab_ColumnTabPtrs
+Tab_HeatCorr0:
+; [C] energy correction for grey level 0, by row heat (RowHeatInt)
   D476  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   D486  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   D496  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
@@ -10538,8 +10554,8 @@ Tab_D476:
   D556  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   D566  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
 
-Tab_D576:
-; [?] via Tab_ColumnTabPtrs
+Tab_HeatCorr1:
+; [C] energy correction for grey level 1, by row heat (RowHeatInt)
   D576  fefcfcfcfcfcfcfcfcfcfcfcfcfcfcfc db $FE, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC
   D586  fcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfc db $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC
   D596  fcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfc db $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC
@@ -10557,8 +10573,8 @@ Tab_D576:
   D656  fcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfc db $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC
   D666  fcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfc db $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC, $FC
 
-Tab_D676:
-; [?] via Tab_ColumnTabPtrs
+Tab_HeatCorr2:
+; [C] energy correction for grey level 2, by row heat (RowHeatInt)
   D676  fcf9f9f9f9f9f9f9f9f9f9f9f9f9f9f9 db $FC, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9
   D686  f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9 db $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9
   D696  f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9 db $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9
@@ -10576,8 +10592,8 @@ Tab_D676:
   D756  f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9 db $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9
   D766  f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9 db $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9, $F9
 
-Tab_D776:
-; [?] via Tab_ColumnTabPtrs
+Tab_HeatCorr3:
+; [C] energy correction for grey level 3, by row heat (RowHeatInt)
   D776  f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6 db $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6, $F6
   D786  f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3 db $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3
   D796  f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3 db $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3, $F3
@@ -10595,43 +10611,44 @@ Tab_D776:
   D856  f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1 db $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1
   D866  f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1 db $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1, $F1
 
-Tab_D876:
-; [?]
-  D876  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D886  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D896  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D8A6  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D8B6  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D8C6  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  D8D6  00000000000000000000080008000800 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $08, $00, $08, $00, $08, $00
-  D8E6  080008000c000c000c000c000c000c00 db $08, $00, $08, $00, $0C, $00, $0C, $00, $0C, $00, $0C, $00, $0C, $00, $0C, $00
-  D8F6  0c001000100010001000100010001000 db $0C, $00, $10, $00, $10, $00, $10, $00, $10, $00, $10, $00, $10, $00, $10, $00
-  D906  10001400140014001400140014001400 db $10, $00, $14, $00, $14, $00, $14, $00, $14, $00, $14, $00, $14, $00, $14, $00
-  D916  14001400180018001800180018001800 db $14, $00, $14, $00, $18, $00, $18, $00, $18, $00, $18, $00, $18, $00, $18, $00
-  D926  18001800180018001c001c001c001c00 db $18, $00, $18, $00, $18, $00, $18, $00, $1C, $00, $1C, $00, $1C, $00, $1C, $00
-  D936  1c001c001c001c001c001c0020002000 db $1C, $00, $1C, $00, $1C, $00, $1C, $00, $1C, $00, $1C, $00, $20, $00, $20, $00
-  D946  20002000200020002000200020002000 db $20, $00, $20, $00, $20, $00, $20, $00, $20, $00, $20, $00, $20, $00, $20, $00
-  D956  20002000240024002400240024002400 db $20, $00, $20, $00, $24, $00, $24, $00, $24, $00, $24, $00, $24, $00, $24, $00
-  D966  24002400240024002400240028002800 db $24, $00, $24, $00, $24, $00, $24, $00, $24, $00, $24, $00, $28, $00, $28, $00
-  D976  28002800280028002800280028002800 db $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00
-  D986  28002800280028002800280028002800 db $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00
-  D996  28002800280028002800280028002c00 db $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $28, $00, $2C, $00
-  D9A6  2c002c002c002c002c002c002c002c00 db $2C, $00, $2C, $00, $2C, $00, $2C, $00, $2C, $00, $2C, $00, $2C, $00, $2C, $00
-  D9B6  2c002c002c0030003000300030003000 db $2C, $00, $2C, $00, $2C, $00, $30, $00, $30, $00, $30, $00, $30, $00, $30, $00
-  D9C6  30003000300030003000300030003400 db $30, $00, $30, $00, $30, $00, $30, $00, $30, $00, $30, $00, $30, $00, $34, $00
-  D9D6  34003400340034003400340034003400 db $34, $00, $34, $00, $34, $00, $34, $00, $34, $00, $34, $00, $34, $00, $34, $00
-  D9E6  34003400380038003800380038003800 db $34, $00, $34, $00, $38, $00, $38, $00, $38, $00, $38, $00, $38, $00, $38, $00
-  D9F6  380038003800380038003c003c003c00 db $38, $00, $38, $00, $38, $00, $38, $00, $38, $00, $3C, $00, $3C, $00, $3C, $00
-  DA06  3c003c003c003c003c003c003c004000 db $3C, $00, $3C, $00, $3C, $00, $3C, $00, $3C, $00, $3C, $00, $3C, $00, $40, $00
-  DA16  40004000400040004000400040004000 db $40, $00, $40, $00, $40, $00, $40, $00, $40, $00, $40, $00, $40, $00, $40, $00
-  DA26  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  DA36  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  DA46  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  DA56  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  DA66  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+Tab_BandCoolByTemp:
+; [C] 256 words: heat removed from every row at a band change, by temperature
+; words D876-DA75: [C] Tab_BandCoolByTemp
+  D876  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D886  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D896  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D8A6  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D8B6  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D8C6  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  D8D6  00000000000000000000080008000800 dw $0000, $0000, $0000, $0000, $0000, $0008, $0008, $0008
+  D8E6  080008000c000c000c000c000c000c00 dw $0008, $0008, $000C, $000C, $000C, $000C, $000C, $000C
+  D8F6  0c001000100010001000100010001000 dw $000C, $0010, $0010, $0010, $0010, $0010, $0010, $0010
+  D906  10001400140014001400140014001400 dw $0010, $0014, $0014, $0014, $0014, $0014, $0014, $0014
+  D916  14001400180018001800180018001800 dw $0014, $0014, $0018, $0018, $0018, $0018, $0018, $0018
+  D926  18001800180018001c001c001c001c00 dw $0018, $0018, $0018, $0018, $001C, $001C, $001C, $001C
+  D936  1c001c001c001c001c001c0020002000 dw $001C, $001C, $001C, $001C, $001C, $001C, $0020, $0020
+  D946  20002000200020002000200020002000 dw $0020, $0020, $0020, $0020, $0020, $0020, $0020, $0020
+  D956  20002000240024002400240024002400 dw $0020, $0020, $0024, $0024, $0024, $0024, $0024, $0024
+  D966  24002400240024002400240028002800 dw $0024, $0024, $0024, $0024, $0024, $0024, $0028, $0028
+  D976  28002800280028002800280028002800 dw $0028, $0028, $0028, $0028, $0028, $0028, $0028, $0028
+  D986  28002800280028002800280028002800 dw $0028, $0028, $0028, $0028, $0028, $0028, $0028, $0028
+  D996  28002800280028002800280028002c00 dw $0028, $0028, $0028, $0028, $0028, $0028, $0028, $002C
+  D9A6  2c002c002c002c002c002c002c002c00 dw $002C, $002C, $002C, $002C, $002C, $002C, $002C, $002C
+  D9B6  2c002c002c0030003000300030003000 dw $002C, $002C, $002C, $0030, $0030, $0030, $0030, $0030
+  D9C6  30003000300030003000300030003400 dw $0030, $0030, $0030, $0030, $0030, $0030, $0030, $0034
+  D9D6  34003400340034003400340034003400 dw $0034, $0034, $0034, $0034, $0034, $0034, $0034, $0034
+  D9E6  34003400380038003800380038003800 dw $0034, $0034, $0038, $0038, $0038, $0038, $0038, $0038
+  D9F6  380038003800380038003c003c003c00 dw $0038, $0038, $0038, $0038, $0038, $003C, $003C, $003C
+  DA06  3c003c003c003c003c003c003c004000 dw $003C, $003C, $003C, $003C, $003C, $003C, $003C, $0040
+  DA16  40004000400040004000400040004000 dw $0040, $0040, $0040, $0040, $0040, $0040, $0040, $0040
+  DA26  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  DA36  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  DA46  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  DA56  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
+  DA66  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
 
-Tab_DA76:
-; [?] indexed by an ADC reading
+Tab_DecayByTemp:
+; [C] per-tick heat decay factor (/256), by temperature
   DA76  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   DA86  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   DA96  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
@@ -10649,54 +10666,46 @@ Tab_DA76:
   DB56  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   DB66  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
 
-Tab_DB76:
-; [?]
-  DB76  88dba1dbbadbd3dbecdb05dc1edc37dc50dc db $88, $DB, $A1, $DB, $BA, $DB, $D3, $DB, $EC, $DB, $05, $DC, $1E, $DC, $37, $DC, $50, $DC
+Tab_TickCurvePtrsWarm:
+; [C] 9 pointers (one per band) into Tab_TickCurvesWarm
+; words DB76-DB87: [C] band curve pointers
+  DB76  88dba1dbbadbd3dbecdb05dc1edc37dc dw $DB88, $DBA1, $DBBA, $DBD3, $DBEC, $DC05, $DC1E, $DC37
+  DB86  50dc                             dw $DC50
 
-Tab_HeatCurveInk:
-; [I] heat-compensation curve (column with dots)
-; bytes DB88-DC68: [I] heat curve
-  DB88  64646464646464646464646466646261 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $66, $64, $62, $61
-  DB98  605f5e5e5d5d64646464646464646464 db $60, $5F, $5E, $5E, $5D, $5D, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64
-  DBA8  646464646462605f5e5d5d5c5b5b5b64 db $64, $64, $64, $64, $64, $62, $60, $5F, $5E, $5D, $5D, $5C, $5B, $5B, $5B, $64
-  DBB8  6464646464646464646464646464615e db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $61, $5E
-  DBC8  5e5c5b5b5a5a59596464646464646464 db $5E, $5C, $5B, $5B, $5A, $5A, $59, $59, $64, $64, $64, $64, $64, $64, $64, $64
-  DBD8  646464646464645f5d5d5c5b5a595959 db $64, $64, $64, $64, $64, $64, $64, $5F, $5D, $5D, $5C, $5B, $5A, $59, $59, $59
-  DBE8  59646464646464646464646464646464 db $59, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64
-  DBF8  5e5c5b5a5a5959585858646464646464 db $5E, $5C, $5B, $5A, $5A, $59, $59, $58, $58, $58, $64, $64, $64, $64, $64, $64
-  DC08  6464646464646464645d5b5a59595958 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $5D, $5B, $5A, $59, $59, $59, $58
-  DC18  58575764646464646464646464646464 db $58, $57, $57, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64
-  DC28  64645c5a595958575656565664646464 db $64, $64, $5C, $5A, $59, $59, $58, $57, $56, $56, $56, $56, $64, $64, $64, $64
-  DC38  64646464646464646464645c5a595958 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5C, $5A, $59, $59, $58
-  DC48  57575756566464646464646464646464 db $57, $57, $57, $56, $56, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64
-  DC58  646464645c5a59595857575756566464 db $64, $64, $64, $64, $5C, $5A, $59, $59, $58, $57, $57, $57, $56, $56, $64, $64
-  DC68  64                               db $64
+Tab_TickCurvesWarm:
+; [C] 9 curves x 25 steps: strobe tick length (us) per step of a band, head warm
+; bytes DB88-DC68: [C] one row per band
+  DB88  64646464646464646464646466646261605f5e5e5d5d646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $66, $64, $62, $61, $60, $5F, $5E, $5E, $5D, $5D, $64, $64, $64
+  DBA1  64646464646464646464646462605f5e5d5d5c5b5b5b646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $62, $60, $5F, $5E, $5D, $5D, $5C, $5B, $5B, $5B, $64, $64, $64
+  DBBA  646464646464646464646464615e5e5c5b5b5a5a5959646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $61, $5E, $5E, $5C, $5B, $5B, $5A, $5A, $59, $59, $64, $64, $64
+  DBD3  6464646464646464646464645f5d5d5c5b5a59595959646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5F, $5D, $5D, $5C, $5B, $5A, $59, $59, $59, $59, $64, $64, $64
+  DBEC  6464646464646464646464645e5c5b5a5a5959585858646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5E, $5C, $5B, $5A, $5A, $59, $59, $58, $58, $58, $64, $64, $64
+  DC05  6464646464646464646464645d5b5a59595958585757646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5D, $5B, $5A, $59, $59, $59, $58, $58, $57, $57, $64, $64, $64
+  DC1E  6464646464646464646464645c5a5959585756565656646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5C, $5A, $59, $59, $58, $57, $56, $56, $56, $56, $64, $64, $64
+  DC37  6464646464646464646464645c5a5959585757575656646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5C, $5A, $59, $59, $58, $57, $57, $57, $56, $56, $64, $64, $64
+  DC50  6464646464646464646464645c5a5959585757575656646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5C, $5A, $59, $59, $58, $57, $57, $57, $56, $56, $64, $64, $64
 
-Tab_DC69:
-; [?]
-  DC69  7bdc94dcaddcc6dcdfdcf8dc11dd2add43dd db $7B, $DC, $94, $DC, $AD, $DC, $C6, $DC, $DF, $DC, $F8, $DC, $11, $DD, $2A, $DD, $43, $DD
+Tab_TickCurvePtrsCold:
+; [C] 9 pointers into Tab_TickCurvesCold
+; words DC69-DC7A: [C] band curve pointers
+  DC69  7bdc94dcaddcc6dcdfdcf8dc11dd2add dw $DC7B, $DC94, $DCAD, $DCC6, $DCDF, $DCF8, $DD11, $DD2A
+  DC79  43dd                             dw $DD43
 
-Tab_HeatCurveBlank:
-; [I] heat-compensation curve (blank column)
-; bytes DC7B-DD5B: [I] heat curve
-  DC7B  64646464646464646464646467666462 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $67, $66, $64, $62
-  DC8B  6261605f5f5f64646464646464646464 db $62, $61, $60, $5F, $5F, $5F, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64
-  DC9B  646464646464605e5e5d5c5b5a5a5a64 db $64, $64, $64, $64, $64, $64, $60, $5E, $5E, $5D, $5C, $5B, $5A, $5A, $5A, $64
-  DCAB  64646464646464646464646464645e5c db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5E, $5C
-  DCBB  5b5a5959585858586464646464646464 db $5B, $5A, $59, $59, $58, $58, $58, $58, $64, $64, $64, $64, $64, $64, $64, $64
-  DCCB  646464646464645c5a59585858575656 db $64, $64, $64, $64, $64, $64, $64, $5C, $5A, $59, $58, $58, $58, $57, $56, $56
-  DCDB  56646464646464646464646464646464 db $56, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64
-  DCEB  5b595857565655555554646464646464 db $5B, $59, $58, $57, $56, $56, $55, $55, $55, $54, $64, $64, $64, $64, $64, $64
-  DCFB  6464646464646464645a585756565555 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $5A, $58, $57, $56, $56, $55, $55
-  DD0B  54535364646464646464646464646464 db $54, $53, $53, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64
-  DD1B  64645957575555545454535364646464 db $64, $64, $59, $57, $57, $55, $55, $54, $54, $54, $53, $53, $64, $64, $64, $64
-  DD2B  64646464646464646464645955555453 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $59, $55, $55, $54, $53
-  DD3B  53535352526464646464646464646464 db $53, $53, $53, $52, $52, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64
-  DD4B  64646464595555545353525251516464 db $64, $64, $64, $64, $59, $55, $55, $54, $53, $53, $52, $52, $51, $51, $64, $64
-  DD5B  64                               db $64
+Tab_TickCurvesCold:
+; [C] 9 curves x 25 steps: tick length when every row heat is zero (slightly longer)
+; bytes DC7B-DD5B: [C] one row per band
+  DC7B  646464646464646464646464676664626261605f5f5f646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $67, $66, $64, $62, $62, $61, $60, $5F, $5F, $5F, $64, $64, $64
+  DC94  64646464646464646464646464605e5e5d5c5b5a5a5a646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $60, $5E, $5E, $5D, $5C, $5B, $5A, $5A, $5A, $64, $64, $64
+  DCAD  6464646464646464646464645e5c5b5a595958585858646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5E, $5C, $5B, $5A, $59, $59, $58, $58, $58, $58, $64, $64, $64
+  DCC6  6464646464646464646464645c5a5958585857565656646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5C, $5A, $59, $58, $58, $58, $57, $56, $56, $56, $64, $64, $64
+  DCDF  6464646464646464646464645b595857565655555554646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5B, $59, $58, $57, $56, $56, $55, $55, $55, $54, $64, $64, $64
+  DCF8  6464646464646464646464645a585756565555545353646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $5A, $58, $57, $56, $56, $55, $55, $54, $53, $53, $64, $64, $64
+  DD11  64646464646464646464646459575755555454545353646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $59, $57, $57, $55, $55, $54, $54, $54, $53, $53, $64, $64, $64
+  DD2A  64646464646464646464646459555554535353535252646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $59, $55, $55, $54, $53, $53, $53, $53, $52, $52, $64, $64, $64
+  DD43  64646464646464646464646459555554535352525151646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $59, $55, $55, $54, $53, $53, $52, $52, $51, $51, $64, $64, $64
 
-Tab_HeatTrim:
-; [I] subtracted from the curve value (index 0x041E)
+Tab_TickTrimBySoak:
+; [C] 41 values subtracted from the tick length, by HeatSoak (bands since the head was cold)
   DD5C  000103040607080809090a0a0a0a0a0b db $00, $01, $03, $04, $06, $07, $08, $08, $09, $09, $0A, $0A, $0A, $0A, $0A, $0B
   DD6C  0b0b0b0b0c0c0c0c0c0d0d0d0d0d0e0e db $0B, $0B, $0B, $0B, $0C, $0C, $0C, $0C, $0C, $0D, $0D, $0D, $0D, $0D, $0E, $0E
   DD7C  0e0e0e0f0f0f0f0f0f               db $0E, $0E, $0E, $0F, $0F, $0F, $0F, $0F, $0F

@@ -260,6 +260,37 @@ How the head is driven (from the code, reproduced in the emulator, timing checke
   With a reading of 0x80 the emulator gives 1.81 / 1.38 / 1.03 ms.
 - **Heat compensation [new]:** the on-time is not constant. The first burst of a job is about twice as long (2.99 ms for black). The on-time then steps down every 16 bursts as the head warms (1.85, 1.84, 1.80, 1.76 … ms), rises slightly towards the end, and the last line is the shortest (1.46 ms for black). The step comes from the table read at AB45, indexed by the line counter 0x72.
 - White dots get only very short pulses (0.02–0.15 ms).
+### Head energy model (L6)
+
+Each dot gets its own on-window inside the 33-tick burst. The window is computed per column (`Line_FirstColumn`, `Line_NextColumnA/B`, `Line_Column*`) in four stages:
+
+1. **Pixels.** `Line_CopyColumnSource` copies the 32 bytes of the tile column being printed (2 stacked tiles, 16 rows, 2 bit-planes). `Line_ExtractColumn` takes pixel x (`TileColumnX`, 0–7) of each row and applies the palette, giving 16 dot values 0–3 (`ColumnPixels`).
+2. **History.** `Line_ColumnHistory` keeps, per row, the previous dot and the current dot (`RowHistory` = prev × 16 + cur) and looks up an energy code in `Tab_EnergyByHistory` (0xCCB6):
+
+   | Previous \ current | 0 | 1 | 2 | 3 |
+   |---|---|---|---|---|
+   | 0 | 0 | 0x3B | 0x52 | 0x6B |
+   | 1 | 0 | 0x29 | 0x45 | 0x65 |
+   | 2 | 0 | 0x25 | 0x36 | 0x60 |
+   | 3 | 0 | 0x21 | 0x2B | 0x4A |
+
+   A dot that was already hot gets less energy.
+3. **Heat of each element.** `RowHeat` (16 words, 8.8 fixed point) models the temperature of each of the 16 head elements:
+   - per column, a printed dot adds `Tab_HeatAddByCode[code]` (0xD176), or `Tab_HeatAddFreshByTemp` (0xD276) when it follows a white dot;
+   - a white dot changes it by `Tab_IdleCoolByTemp` (0xD076, usually a decrease);
+   - every 10.24 ms tick multiplies it by `Tab_DecayByTemp[t]` / 256 (0xDA76);
+   - every band change subtracts `Tab_BandCoolByTemp[t]` (0xD876).
+
+   All of these depend on the temperature reading (TH1).
+4. **Code and window.** `Line_ColumnEnergy`: code = `HeatTime` + `Tab_HeatCorr<grey>[RowHeatInt]` (one 256-byte table per grey level, 0xD476–0xD776) + history code, clamped to 0–0x64. `Tab_DotTicks` (0xCCF6) turns the code into a first tick and a tick count. Higher codes start earlier and last longer, so every dot's window ends at about the same tick. Even white dots can get a short window from their correction table, which gives the 0.02–0.15 ms pulses seen on white.
+
+The tick length itself (`TREG1A`, µs) = `Tab_TickCurves*[BandIndex][step]` − `Tab_TickTrimBySoak[HeatSoak]`:
+- 9 bands × 25 steps;
+- a warm set (0xDB88) and a cold set (0xDC7B), the cold set used when every `RowHeat` is zero;
+- the trim grows with the number of bands printed since the head was last cold (0–40).
+
+**Battery under load:** at the first burst of a job, TC1 reads the battery while the head draws current. Low battery is raised at ≤ 0x7E, or at ≤ 0x9C if the reading sagged 8 or more below the idle reading taken at job start (`BattAtStart`).
+
 
 ---
 
@@ -286,6 +317,10 @@ How the head is driven (from the code, reproduced in the emulator, timing checke
 - copy count, memory pointers and ring buffer.
 
 This is effectively an Init. So a sender must not pause too long between the last data packet and Print. After a job ends, the status also falls back to 0x00 by itself.
+
+**Idle and serial watchdog.** The printer enters IDLE mode (1 s tick) 133 ms after the last byte when nothing is pending, and the front button or a serial byte wakes it (emulator). If no packet is in progress and the serial port has been quiet for about 123 ms, the firmware re-arms SIO2 in 1-byte mode (`Main_Tick`, `JobFlags.SioRearm`). The firmware has no timed power-off: nothing changes in 4 minutes of idle in the emulator.
+
+**Supply cut (P5.3).** P5.3 is cleared, and never set again, when low battery is detected, and in the idle state after 27 encoder pulses with no job (paper pulled by hand). On the schematic it drives the latch of the head supply, which also lights LED1, so this probably cuts the head supply until the printer is switched off (inferred: the emulator does not model the supply).
 
 **Paper jam.** During printing or feeding, a timer (0xF3/0xF4) counts down while waiting for the mechanism; on expiry the motor stops, the jam abort described in section 6 happens, and the state machine returns to 0.
 
@@ -350,7 +385,6 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 **?** (not resolved):
 
 - The physical rate of the paper encoder (INT3) and the length of one revolution of the cam sensor (P5.1 / INT4). Margins are counted in cam revolutions.
-- The mechanism / head state machine: a 30-state table at 0xAB65 (state variable 0x73). States 0x11 = print, 0x12 = print body, 0x14 = top margin, 0x15 = bottom margin / self-test feed, 0x16 = feed only, 0x17 = button feed, 0x18 = low-battery stop.
 - INT3 is the paper-motor encoder and P5.1 / INT4 a once-per-revolution cam or home sensor (from the code and from what makes the emulator print); P5.2 low runs the motor. Which physical parts they are, and the SRAM address mapping in A564 (the order bytes are laid out for printing), are not known.
 
 ---
