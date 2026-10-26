@@ -1,6 +1,14 @@
 # Game-Boy-Printer-disassembly
 Disassembly of the Game Boy Camera, TMP87C840 Toshiba ROM version. Work in progress
 
+## The board (IF-GBP-02)
+
+| Owner's photo | Head lines marked |
+|---|---|
+| ![IF-GBP-02 board](hardware/IF-GBP-02_board.jpg) | ![IF-GBP-02 board, head lines](hardware/IF-GBP-02_board_head_lines.jpg) |
+
+IC2 is the TMP87PM40AF microcontroller (the one-time-programmable version of the TMP87C840) with the 8 MHz crystal X1. IC3 is the 8K x 8 image SRAM. IC5 and IC6 are TD62593A drivers for the 16 head lines (P00–P17, QFP pins 3–18). The full schematic is in [RWeick/IF-GBP-02-Gameboy-Printer](https://github.com/RWeick/IF-GBP-02-Gameboy-Printer); the pin-by-pin use is in `symbols/sfr.csv`.
+
 ## Built-in self-test banner
 
 Holding the front button while switching on (port P2.0 read low twice at boot) makes the printer print this 160 x 16 px band, stored in the ROM at 0xDDEE-0xE06D (640 bytes, Game Boy 2bpp tiles):
@@ -27,7 +35,7 @@ All of this is AI work, from reading the code and running it in the emulator, wa
 
 | Level | State |
 |---|---|
-| L0 listing gives the ROM back | byte round trip from the listing's hex column, md5 checked by the build (no TLCS-870 assembler yet) |
+| L0 listing reassembles to the same md5 | not done: the build only reads the listing's hex column back (md5 matches); the mnemonics are not reassembled, as there is no TLCS-870 assembler yet |
 | L1 every byte typed | done: code 16,220 B, jump tables 2,238 B, tables 6,263 B, fill 8,047 B |
 | L2 code traced and run | done: all indirect jumps resolved; 88 % of the code bytes run in the emulator, nothing runs outside the trace |
 | L3 names | 157 ROM names (all routines, states, tables, receiver and command blocks); 902 short branch targets keep automatic labels |
@@ -40,5 +48,5 @@ All of this is AI work, from reading the code and running it in the emulator, wa
 - The printer ROM dump and the Toshiba TMP87C840 datasheet (`TMP87C840_Toshiba.pdf`), from the owner's source pack in [Game-Boy-Camera-disassembly](https://github.com/Raphael-Boichot/Game-Boy-Camera-disassembly) (`Source_material/Source_material.zip`): pinout, register maps, timers, serial interface, A/D converter.
 - [MAME TLCS-870 core](https://github.com/mamedev/mame/tree/master/src/devices/cpu/tlcs870) (`tlcs870d.cpp`, `tlcs870*.cpp`, BSD-3-Clause): opcode map for `tools/t870.py`, and Toshiba's instruction and flag table quoted in its comments, used for the emulator CPU. No MAME code is included.
 - [RWeick/IF-GBP-02-Gameboy-Printer](https://github.com/RWeick/IF-GBP-02-Gameboy-Printer): complete schematic, KiCad PCB and Gerbers of the printer board (IF-GBP-02); every MCU pin's net (head drivers, motor connector, sensors, thermistor, battery divider, power hold, link port).
-- The owner's photos of the printer board and scope measurements of the head strobes (4 ms per pixel column; 1.56 / 1.20 / 0.96 ms at exposure 64).
+- The owner's photos of the printer board (`hardware/`) and scope measurements of the head strobes (4 ms per pixel column; 1.56 / 1.20 / 0.96 ms at exposure 64).
 - [Game-Boy-Camera-disassembly](https://github.com/Raphael-Boichot/Game-Boy-Camera-disassembly): the disassembly playbook (levels L0–L6) and the C / I / ? evidence tags followed here.
