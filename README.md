@@ -21,16 +21,28 @@ Holding the front button while switching on (port P2.0 read low twice at boot) m
 |---|---|
 | [`Printer_protocol.md`](Printer_protocol.md) | The Game Boy Printer protocol as the firmware implements it: packet format, commands, status bits, image memory and compression, print parameters, timeouts, self-test, emulator checklist |
 | [`TMP87C840_Toshiba_printer_ROM.bin`](TMP87C840_Toshiba_printer_ROM.bin) | The 32 KB ROM dump (md5 `aa393ec87ccb4220200255ab5adf8ac9`), mapped at 0x8000-0xFFFF |
+| [`src/`](src/) | Editable source tree (modules, includes, binary tables); `make` builds `build/printer.bin`, `make check` compares it with the ROM |
+| [`Makefile`](Makefile) | `make`, `make check`, `make listing`, `make source` (regenerates `src/` from `symbols/`, overwriting edits) |
 | [`TMP87C840_printer_rom.asm`](TMP87C840_printer_rom.asm) | Annotated disassembly of the 32 KB ROM, generated from `symbols/` by `tools/build_listing.py` (do not edit by hand) |
 | [`symbols/`](symbols/) | Names of routines, tables, RAM variables, flag bits and registers, data block types, each tagged C / I / ? |
 | [`tools/t870.py`](tools/t870.py) | TLCS-870 disassembler (written from MAME's `tlcs870d.cpp` opcode map) |
 | [`tools/build_listing.py`](tools/build_listing.py) | Builds the listing from the symbol files; checks names, then reassembles the listing and compares the md5 |
-| [`tools/t870asm.py`](tools/t870asm.py) | TLCS-870 assembler for the listing syntax: `python3 tools/t870asm.py TMP87C840_printer_rom.asm out.bin` |
+| [`tools/t870asm.py`](tools/t870asm.py) | TLCS-870 assembler (source tree and listing): `python3 tools/t870asm.py src/main.asm out.bin` |
+| [`tools/make_source.py`](tools/make_source.py) | Writes `src/` from the annotated listing |
 | [`tools/trace.py`](tools/trace.py) | The first plain tracer (unnamed listing), kept for reference |
 | [`emulator/`](emulator/) | Emulator that runs this ROM on an emulated TMP87C840 and talks to it like a Game Boy; `claims.py` checks the protocol reference against the firmware (23 checks, all matching) |
 | [`printer_test_image.png`](printer_test_image.png) | The built-in self-test image (ROM 0xDDEE-0xE06D, 160 x 16 px), drawn 4x |
 
 All of this is AI work, from reading the code and running it in the emulator, waiting for validation on real hardware.
+
+## Building
+
+```
+make          # build/printer.bin from src/
+make check    # md5 must be aa393ec87ccb4220200255ab5adf8ac9
+```
+
+Only Python 3 is needed (`make` is optional: `python3 tools/t870asm.py src/main.asm build/printer.bin` then `python3 tools/check_md5.py build/printer.bin aa393ec87ccb4220200255ab5adf8ac9`).
 
 ## Disassembly status
 
@@ -41,7 +53,7 @@ All of this is AI work, from reading the code and running it in the emulator, wa
 | L2 code traced and run | done: all indirect jumps resolved; 88 % of the code bytes run in the emulator, nothing runs outside the trace |
 | L3 names | 160 ROM names, 76 RAM variables, 61 flag bits, 37 registers: 286 tagged C, 11 I, 0 ?; 898 short branch targets keep automatic labels |
 | L4 RAM and registers in the source | done: every RAM variable, flag bit and register the code uses is named in the listing |
-| L5 buildable tree | not done |
+| L5 buildable tree | done: `src/` (10 modules, 2 include files, 14 binary tables) builds with `make`, and `make check` gives the ROM md5. All ROM addresses are symbolic; code inserted in three modules still gives a working firmware in the emulator (`emulator/relocation_test.py`) |
 | L6 understanding | protocol verified in the emulator; strobe timing matches a real printer; the head energy model (per-dot history, per-element heat, tick curves) and every table decoded; 11 inferred names left (`symbols/README.md`) |
 
 ## Sources

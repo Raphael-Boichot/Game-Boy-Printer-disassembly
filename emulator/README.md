@@ -11,7 +11,7 @@ rx = L.packet(0x01)                 # Init; returns every byte the Game Boy read
 print(status_str(rx[-1]))           # 00[]
 ```
 
-`python3 claims.py` runs 23 protocol checks (output in `claims_output.txt`; all match the reference). `python3 strobe_check.py` measures the head strobe widths for black, dark and light grey over a full picture (output in `strobe_output.txt`). Each takes a few minutes in pure Python.
+`python3 claims.py` runs 23 protocol checks (output in `claims_output.txt`; all match the reference). `python3 strobe_check.py` measures the head strobe widths for black, dark and light grey over a full picture (output in `strobe_output.txt`). `python3 relocation_test.py` checks that `../src/` is really editable: it inserts code in three modules, rebuilds and compares a print job with the original. Each takes a few minutes in pure Python.
 
 ## What is emulated
 

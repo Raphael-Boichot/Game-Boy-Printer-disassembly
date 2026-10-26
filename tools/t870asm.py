@@ -1,6 +1,9 @@
-"""Minimal TLCS-870 assembler for the listing format written by tools/build_listing.py.
+"""Minimal TLCS-870 assembler for the printer source tree (src/) and the listing format.
 
-usage: python3 tools/t870asm.py LISTING.asm OUT.bin
+usage: python3 tools/t870asm.py SOURCE.asm OUT.bin
+
+Directives: org $XXXX, NAME equ $XX, db $XX[, ...] (also $XX xN), dw $XXXX/label[, ...], ds N,$XX,
+include "file", incbin "file" (paths relative to the including file). Comments start with ;.
 
 It reads only the instruction / data text of each line (never the hex column), computes every
 address itself from `org`, resolves labels and `equ` names, and writes the 32 KB image 0x8000-0xFFFF.
@@ -135,44 +138,55 @@ def assemble(text_lines):
     syms = {}
     items = []     # (kind, payload, srcline)
     for ln, raw in enumerate(text_lines, 1):
+        origin = ln
+        if isinstance(raw, tuple):
+            raw, origin = raw
+        if isinstance(raw, bytes):
+            items.append(('bin', raw, origin)); continue
         line = raw.split(';', 1)[0].rstrip()
         if not line.strip():
             continue
-        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s+equ\s+\$([0-9A-F]+)$', line.strip())
+        st = line.strip()
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s+equ\s+\$([0-9A-F]+)$', st)
         if m:
             syms[m.group(1)] = int(m.group(2), 16); continue
-        m = re.match(r'^([A-Za-z_][A-Za-z0-9_/]*):$', line.strip())
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_/]*):$', st)
         if m:
-            items.append(('label', m.group(1), ln)); continue
-        m = re.match(r'^\s*org\s+\$([0-9A-F]+)$', line)
+            items.append(('label', m.group(1), origin)); continue
+        m = re.match(r'^org\s+\$([0-9A-F]+)$', st)
         if m:
-            items.append(('org', int(m.group(1), 16), ln)); continue
-        # listing line: '  ADDR  HEX  text'  -> keep text only
+            items.append(('org', int(m.group(1), 16), origin)); continue
+        m = re.match(r'^ds\s+(\d+)\s*,\s*\$([0-9A-F]{2})$', st)
+        if m:
+            items.append(('bin', bytes([int(m.group(2), 16)]) * int(m.group(1)), origin)); continue
+        # listing line: '  ADDR  HEX  text'  -> keep text only; otherwise the line is source text
         m = re.match(r'^  [0-9A-F]{4}  [0-9a-f]+\s+(.*)$', line)
-        if not m:
-            raise SystemExit('line %d: cannot parse: %r' % (ln, raw))
-        items.append(('ins', m.group(1).strip(), ln))
+        items.append(('ins', (m.group(1) if m else st).strip(), origin))
 
     def resolve(tok_text, pc, lax=False):
         if tok_text.startswith('db '):
             return tok_text
         # replace identifiers by $hex: (Name) with value < 0x100 -> ($XX); others -> $XXXX
+        def val(n, off):
+            v = syms[n] if (n in syms or not lax) else pc
+            return (v + int(off or 0)) & 0xFFFF
+
         def rep_paren(m):
             n = m.group(1)
             if n in REGS:
                 return m.group(0)
-            v = syms[n] if (n in syms or not lax) else pc
+            v = val(n, m.group(2))
             return '($%02X)' % v if v < 0x100 else '($%04X)' % v
 
-        t = re.sub(r'\(([A-Za-z_][A-Za-z0-9_/]*)\)', rep_paren, tok_text)
+        t = re.sub(r'\(([A-Za-z_][A-Za-z0-9_/]*)([+-]\d+)?\)', rep_paren, tok_text)
 
         def rep_id(m):
-            n = m.group(0)
+            n = m.group(1)
             if n in REGS:
-                return n
-            return '$%04X' % (syms[n] if (n in syms or not lax) else pc)
+                return m.group(0)
+            return '$%04X' % val(n, m.group(2))
         head, _, rest = t.partition(' ')
-        rest = re.sub(r'(?<![$\w])[A-Za-z_][A-Za-z0-9_/]*', rep_id, rest)
+        rest = re.sub(r'(?<![$\w])([A-Za-z_][A-Za-z0-9_/]*)([+-]\d+)?', rep_id, rest)
         return (head + ' ' + rest).strip()
 
     def encode(text, pc):
@@ -234,23 +248,46 @@ def assemble(text_lines):
         image = {}
         for kind, payload, ln in items:
             if kind == 'org':
+                if payload < pc:
+                    raise SystemExit('%s: org $%04X is below the current address $%04X (code too long)' % (ln, payload, pc))
                 pc = payload
             elif kind == 'label':
                 if passno == 1:
                     syms[payload] = pc
+            elif kind == 'bin':
+                for i, x in enumerate(payload):
+                    image[pc + i] = x
+                pc += len(payload)
             else:
                 try:
                     txt = resolve(payload, pc, lax=(passno == 1))
                 except KeyError as e:
-                    raise SystemExit('line %d: unknown name %s' % (ln, e))
+                    raise SystemExit('%s: unknown name %s' % (ln, e))
                 try:
                     bs = encode(txt, pc)
                 except ValueError as e:
-                    raise SystemExit('line %d: %s  [%s]' % (ln, e, payload))
+                    raise SystemExit('%s: %s  [%s]' % (ln, e, payload))
                 for i, x in enumerate(bs):
                     image[pc + i] = x
                 pc += len(bs)
     return image
+
+
+def load_source(path, depth=0):
+    """Read a source file, expanding `include "file"` and `incbin "file"` (paths relative to the file)."""
+    out = []
+    base = os.path.dirname(os.path.abspath(path))
+    for ln, raw in enumerate(open(path).read().splitlines(), 1):
+        where = '%s:%d' % (os.path.relpath(path), ln)
+        st = raw.split(';', 1)[0].strip()
+        m = re.match(r'^include\s+"([^"]+)"$', st)
+        if m:
+            out += load_source(os.path.join(base, m.group(1)), depth + 1); continue
+        m = re.match(r'^incbin\s+"([^"]+)"$', st)
+        if m:
+            out.append((open(os.path.join(base, m.group(1)), 'rb').read(), where)); continue
+        out.append((raw, where))
+    return out
 
 
 def encode_guess(payload, txt, pc, encode):
@@ -260,8 +297,7 @@ def encode_guess(payload, txt, pc, encode):
 
 
 if __name__ == '__main__':
-    src = open(sys.argv[1]).read().splitlines()
-    img = assemble(src)
+    img = assemble(load_source(sys.argv[1]))
     out = bytearray([0xFF]) * 0x8000
     for a, v in img.items():
         if 0x8000 <= a <= 0xFFFF:

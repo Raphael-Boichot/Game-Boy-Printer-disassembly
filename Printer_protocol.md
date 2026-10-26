@@ -434,6 +434,7 @@ Packets sent before step 3 are answered 0xFF.
 
 ## 13. Method and files
 
+- `src/` + `Makefile`: the editable source tree; `make check` rebuilds the ROM (md5 checked). `tools/make_source.py` writes it from the listing.
 - `tools/build_listing.py`: builds `TMP87C840_printer_rom.asm` from the symbol files in `symbols/` (names, RAM, flag bits, registers, data types), with checks, and reassembles the listing text with `tools/t870asm.py`; the result must give the ROM md5 again (`symbols/README.md`).
 - `tools/t870.py`: a TLCS-870 disassembler written for this work, based on MAME's `tlcs870d.cpp` opcode map. Note: `T`/`F` jump conditions test the CPU's JF flag; they are not always/never. After `test`, `jr T` is taken when the bit is **0**.
 - `tools/trace.py` (`python3 tools/trace.py ROM.bin OUT.asm ABA1` regenerates the listing exactly): recursive tracer from the 16 interrupt vectors. It follows calls, branches and the 33 `jp (PC+A)` jump tables (one 30-entry state table at 0xAB65, and 32 tables at 0xBED7–0xCA58 in the head-strobe pattern code). About 16 KB of the 24.7 KB used ROM is reached as code; the rest is lookup tables and the test image.
