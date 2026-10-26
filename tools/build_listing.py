@@ -12,8 +12,9 @@ Inputs (symbols/):
   roots.csv      addr,reason                     extra code entry points for the tracer
 
 Checks (the build aborts on any of them): duplicate names, a ROM name that is not on an instruction
-or data boundary, a data block overlapping traced code, and the byte round trip: the hex column of
-the listing, read back, must give the ROM again (md5 printed).
+or data boundary, a data block overlapping traced code, the byte round trip (the hex column read
+back must give the ROM), and the reassembly (L0): tools/t870asm.py assembles the instruction and
+data text alone, computing every address itself, and must give the ROM md5 again.
 """
 import csv, hashlib, os, re, struct, sys
 
@@ -183,6 +184,7 @@ for a in sorted(ram):
 out.append('')
 
 typemap = {s: (e, r) for s, e, r in types}
+out.append('        org $8000')
 a = 0x8000
 counts = {'code': 0, 'jumptable': 0}
 while a < 0x10000:
@@ -204,7 +206,8 @@ while a < 0x10000:
                 out.append('  %04X  %-32s dw %s' % (k, m[k:min(k + 16, e + 1)].hex(), ', '.join('$%04X' % w for w in ws)))
         elif r['type'] == 'fill':
             for k in range(a, e + 1, 16):
-                out.append('  %04X  %-32s db fill' % (k, m[k:min(k + 16, e + 1)].hex()))
+                seg = m[k:min(k + 16, e + 1)]
+                out.append('  %04X  %-32s db $%02X x%d' % (k, seg.hex(), seg[0], len(seg)))
         else:
             w = int(r.get('width') or 16)
             for k in range(a, e + 1, w):
@@ -265,6 +268,16 @@ if any(x != 1 for x in seen):
 if errors:
     print('BUILD FAILED'); [print('  ' + e) for e in errors]; sys.exit(1)
 open(out_path, 'w').write(text)
+
+# L0: reassemble the instruction / data text (not the hex column) with tools/t870asm.py
+import t870asm
+imgd = t870asm.assemble(text.splitlines())
+asm = bytearray([0xFF]) * 0x8000
+for ad, v in imgd.items():
+    asm[ad - 0x8000] = v
+if bytes(asm) != rom or len(imgd) != 0x8000:
+    print('BUILD FAILED: reassembly of the listing text differs from the ROM'); sys.exit(1)
+print('reassembled from the instruction text: md5 %s' % hashlib.md5(bytes(asm)).hexdigest())
 tot = sum(counts.values())
 print('wrote %s' % out_path)
 print('round trip md5 %s (ROM %s)' % (hashlib.md5(bytes(img)).hexdigest(), hashlib.md5(rom).hexdigest()))

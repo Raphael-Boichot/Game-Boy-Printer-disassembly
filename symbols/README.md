@@ -13,7 +13,7 @@
 
 Tags: **C** = code-traced, or reproduced by running the firmware in `../emulator/`; **I** = inferred; **?** = doubt (name is a placeholder).
 
-The build stops on a duplicate name, a name that is not on an instruction or block start, a data block that overlaps traced code, or a byte round trip that does not give the ROM back (md5 `aa393ec87ccb4220200255ab5adf8ac9`). Short branch targets inside routines keep automatic names (`Lxxxx`, `Jxxxx` for jump-table targets).
+The build stops on a duplicate name, a name that is not on an instruction or block start, a data block that overlaps traced code, a byte round trip that does not give the ROM back, or a reassembly of the listing text (`tools/t870asm.py`) that does not give md5 `aa393ec87ccb4220200255ab5adf8ac9`. Short branch targets inside routines keep automatic names (`Lxxxx`, `Jxxxx` for jump-table targets).
 
 Board check: the owner's photos and the complete schematic and PCB of the IF-GBP-02 board ([RWeick/IF-GBP-02-Gameboy-Printer](https://github.com/RWeick/IF-GBP-02-Gameboy-Printer)) give every MCU pin's net; the pin descriptions in `sfr.csv` come from it. The firmware meaning of each signal is checked in the emulator. P5.3 (power hold) is the only port bit whose effect is inferred: on the schematic it drives the supply that feeds the head and LED1, and the firmware only ever clears it.
 
