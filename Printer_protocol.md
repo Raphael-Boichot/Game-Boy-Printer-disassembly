@@ -65,10 +65,10 @@ Boot (0x8000): `di`, `ld SP,$043F`, watchdog disabled by writing 0xB1 to WDTCR2 
 | FFE4 | SIO2 | B373 | packet receiver (coroutine) |
 | FFEA | TC4 (8-bit timer) | B99E | inter-byte timeout: aborts the current packet |
 | FFE2 | TC2 (16-bit timer) | B370 | main-loop tick (sets flag E0.7) |
-| FFF6 | TC1 (16-bit timer) | AA7E | head strobe / stepper output from tables |
-| FFEE | TC3 (8-bit timer) | AAC0 | head-energy timing (reads ADC) |
-| FFE6 / FFE8 | INT4 / INT3 | AAE7 / AAED | mechanism inputs (probably paper/position sensors) |
-| FFE0 | INT5 | AAE6 | `reti` |
+| FFF6 | TC1 (16-bit timer) | AA7E | strobe tick: writes the next tick bytes to P0/P1 (33 ticks per burst); battery sample under load |
+| FFEE | TC3 (8-bit timer) | AAC0 | battery check under load (ADC channel 1) |
+| FFE6 / FFE8 | INT4 / INT3 | AAE7 / AAED | cam sensor (motor connector CN1 pin 5) / paper-motor encoder (CN1 pin 3 through Q10): one strobe burst and one mechanism step per encoder pulse |
+| FFE0 | INT5 | AAE6 | `reti`: the front button (P20 = INT5 pin) only wakes the CPU from idle |
 | others | — | E06E / E06F | `reti` / `retn` |
 
 The CALLV vector table (0xFFC0–0xFFDF) is unused (all 0xFF).
@@ -380,12 +380,14 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 **I** (to check on real hardware):
 
 - the low-battery reporting delay (`D9.1`);
-- everything that depends on the paper mechanism: the emulator's encoder rate and cam-sensor period are guesses (`emulator/README.md`), so print durations and the length of a margin unit are not known.
+- the effect of P5.3 (cutting the head supply), from the schematic;
+- the cam-sensor period in the emulator (a guess, `emulator/README.md`), so the length of a margin unit is not known. The encoder rate is measured: 4 ms per pixel column (owner's scope).
 
 **?** (not resolved):
 
-- The physical rate of the paper encoder (INT3) and the length of one revolution of the cam sensor (P5.1 / INT4). Margins are counted in cam revolutions.
-- INT3 is the paper-motor encoder and P5.1 / INT4 a once-per-revolution cam or home sensor (from the code and from what makes the emulator print); P5.2 low runs the motor. Which physical parts they are, and the SRAM address mapping in A564 (the order bytes are laid out for printing), are not known.
+- The length of one revolution of the cam sensor (P5.1 / INT4) in paper feed. Margins are counted in cam revolutions, so timing a margin-1 feed on a real printer would settle it.
+
+The signals themselves are confirmed by the schematic: INT3 = encoder from CN1 pin 3, INT4 = cam sensor on CN1 pin 5, P5.2 = motor drive.
 
 ---
 
@@ -437,9 +439,10 @@ Packets sent before step 3 are answered 0xFF.
 - `src/` + `Makefile`: the editable source tree; `make check` rebuilds the ROM (md5 checked). `tools/make_source.py` writes it from the listing.
 - `tools/build_listing.py`: builds `TMP87C840_printer_rom.asm` from the symbol files in `symbols/` (names, RAM, flag bits, registers, data types), with checks, and reassembles the listing text with `tools/t870asm.py`; the result must give the ROM md5 again (`symbols/README.md`).
 - `tools/t870.py`: a TLCS-870 disassembler written for this work, based on MAME's `tlcs870d.cpp` opcode map. Note: `T`/`F` jump conditions test the CPU's JF flag; they are not always/never. After `test`, `jr T` is taken when the bit is **0**.
-- `tools/trace.py` (`python3 tools/trace.py ROM.bin OUT.asm ABA1` regenerates the listing exactly): recursive tracer from the 16 interrupt vectors. It follows calls, branches and the 33 `jp (PC+A)` jump tables (one 30-entry state table at 0xAB65, and 32 tables at 0xBED7–0xCA58 in the head-strobe pattern code). About 16 KB of the 24.7 KB used ROM is reached as code; the rest is lookup tables and the test image.
-- `TMP87C840_printer_rom.asm`: the full annotated-label disassembly (vectors named `V_FFxx`, subroutines `Sxxxx`, branch targets `Lxxxx`, jump-table targets `Jxxxx`; data as `db`/`dw`).
+- `tools/trace.py`: the first plain tracer, kept for reference (unnamed listing). The tracing rules live on in `tools/build_listing.py`: recursive descent from the 16 interrupt vectors, following calls, branches and the 33 `jp (PC+A)` jump tables (one 31-entry mechanism state table at 0xAB65, and 32 tables at 0xBED7–0xCA58 in the strobe-table writers). About 16 KB of the 24.7 KB used ROM is code; the rest is tables and the self-test image.
+- `TMP87C840_printer_rom.asm`: the annotated listing generated from `symbols/` (named routines, states, tables, RAM, flag bits and registers, each tagged; 898 short branch targets keep automatic `Lxxxx` / `Jxxxx` labels).
+- `tools/check_repo_consistency.py`: checks every number quoted in the docs, that the generated files are fresh, the links, and the builds (`--slow` also re-runs the emulator checks).
 - `printer_test_image.png`: the self-test band rendered 4×.
 - `emulator/`: the firmware emulator and the protocol checks of section 14.
 
-Key routines for anyone continuing: B373 receiver · B9B4 byte-wait yield · B99E inter-byte timeout · 80D5 main loop · 8564 command dispatch · 85AB print-argument parser · A29D–A406 data decoder · A4C0 RLE · A48F/A4A4 SRAM read/write · A409 temperature/battery check · DD85 SRAM test · DDAD self-test loader · 0xAB62 mechanism state machine.
+Key routines for anyone continuing: `Int_SIO2_Receiver` (B373) · `Rx_WaitByte` (B9B4) · `Int_TC4_ByteTimeout` (B99E) · `Main_Loop` (80D5) · `Main_Commands` (8564) · `Cmd_Print` (85AB) · `Data_Main` (A2ED) · `Rle_NextByte` (A4C0) · `Sram_Read` / `Sram_Write` (A48F / A4A4) · `Sub_CheckTempBattery` (A409) · `Int_INT3_Encoder` and `Mech_Dispatch` (AAED, AB62) · `Line_FirstColumn` and the `Line_Column*` chain (8808, BA51-BBED) · `Boot_SramTest` (DD85) · `SelfTest_Load` (DDAD).

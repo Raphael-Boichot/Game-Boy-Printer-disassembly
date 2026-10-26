@@ -30,6 +30,7 @@ Holding the front button while switching on (port P2.0 read low twice at boot) m
 | [`tools/t870asm.py`](tools/t870asm.py) | TLCS-870 assembler (source tree and listing): `python3 tools/t870asm.py src/main.asm out.bin` |
 | [`tools/make_source.py`](tools/make_source.py) | Writes `src/` from the annotated listing |
 | [`tools/trace.py`](tools/trace.py) | The first plain tracer (unnamed listing), kept for reference |
+| [`tools/check_repo_consistency.py`](tools/check_repo_consistency.py) | Consistency check: quoted numbers, fresh generated files, links, builds (`--slow` re-runs the emulator checks) |
 | [`emulator/`](emulator/) | Emulator that runs this ROM on an emulated TMP87C840 and talks to it like a Game Boy; `claims.py` checks the protocol reference against the firmware (23 checks, all matching) |
 | [`printer_test_image.png`](printer_test_image.png) | The built-in self-test image (ROM 0xDDEE-0xE06D, 160 x 16 px), drawn 4x |
 
