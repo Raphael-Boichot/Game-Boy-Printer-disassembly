@@ -43,7 +43,7 @@ A564,Sram_StorePos,C,SRAM position of the next packet byte: SlotBase + Tab_SramL
 A57E,Tab_SramLayout,C,640 words: packet byte index -> offset in its SRAM slot (tiles reordered by column)
 AA7E,Int_TC1_StrobeTick,C,"TC1: write the next tick bytes to P0/P1; after 33 ticks stop TC1, sample battery"
 AAC0,Int_TC3_BatteryCheck,C,TC3: battery reading under load
-AAE6,Int_INT5_Unused,C,
+AAE6,Int_INT5_ButtonWake,I,bare reti: the front button (P20 = INT5 pin) is enabled as an interrupt only to wake the CPU from IDLE
 AAE7,Int_INT4_CamSensor,C,cam sensor rising edge: MechFlags.CamSeen
 AAED,Int_INT3_Encoder,C,"encoder pulse: start a strobe burst, then run the mechanism state"
 AB62,Mech_Dispatch,C,jump through the state table with MechState

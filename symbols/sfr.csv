@@ -1,21 +1,21 @@
 addr,name,desc
-00,P0,port 0: head strobe lines for band rows 0-7 (bit n = row n)
-01,P1,port 1: head strobe lines for band rows 8-15
-02,P2,port 2: bit0 front button (input; 0 = pressed); bit1 SRAM /WE; bit2 SRAM /CE
+00,P0,port 0 (QFP pins 3-10): head strobe lines for band rows 0-7 (bit n = row n); wired to the transistor arrays IC5/IC6 (board)
+01,P1,port 1 (QFP pins 11-18): head strobe lines for band rows 8-15; wired to IC5/IC6 (board)
+02,P2,port 2: bit0 front button (P20 = INT5/STOP pin 19; 0 = pressed); bit1 SRAM /WE (P21/XTIN pin 21); bit2 SRAM /CE (P22/XTOUT pin 22)
 03,P3,port 3: SRAM address low
 04,P4,port 4: bits 0-4 SRAM address high (written OR 0xE0); bits 5-7 SIO2
-05,P5,port 5: bit0 encoder (INT3 pin); bit1 cam sensor (INT4 pin); bit2 motor (0 = run); bit3 ?; bit4 SRAM /OE
+05,P5,port 5: bit0 encoder (P50 = INT3/TC3 pin 44); bit1 cam sensor (P51 = INT4/TC4 pin 45); bit2 motor (0 = run); bit3 ?; bit4 SRAM /OE
 06,P6,port 6
 07,P7,port 7: SRAM data bus
 0A,P0CR,port 0 direction
 0B,P1CR,port 1 direction
 0C,P6CR,port 6 direction
 0D,P7CR,port 7 direction (0xFF = output for SRAM writes)
-0E,ADCCR,A/D control: low bits channel (0 = temperature: other error 0x40 outside 0x35-0xD7 and strobe base time; 1 = battery: low battery 0x80 at 0x7E or below); bit6 start; bit7 end of conversion
+0E,ADCCR,A/D control: low bits channel (0 = AIN0/P60 pin 50 temperature: other error 0x40 outside 0x35-0xD7 and strobe base time; 1 = AIN1/P61 pin 51 battery: low battery 0x80 at 0x7E or below); bit6 start; bit7 end of conversion
 0F,ADCDR,A/D result
 10,TREG1A,timer 1 register A (16-bit): strobe tick length in us
 12,TREG1B,timer 1 register B
-14,TC1CR,timer 1 control: 0x18 = start fc/2^3 (1 us), 0x08 = stop
+14,TC1CR,timer 1 control: 0x18 = start fc/2^3 (1 us)
 15,TC2CR,timer 2 control: 0x24 = start fc/2^13 (main tick)
 16,TREG2,timer 2 register (16-bit): 0x000A = 10.24 ms tick; 0x03D5 = 1.0 s in idle
 18,TREG3A,timer 3 register A

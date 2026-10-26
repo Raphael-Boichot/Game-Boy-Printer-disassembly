@@ -54,7 +54,7 @@ Boot (0x8000): `di`, `ld SP,$043F`, watchdog disabled by writing 0xB1 to WDTCR2 
 | ADC channel 0 | ADCCR 0x0E = 0x00, result 0x0F | temperature: outside 0x35–0xD7 → "other error" (0x40); indexes the heat-time tables (higher reading = longer strobes, as for an NTC thermistor read colder). Probably TH1 on the main board |
 | ADC channel 1 | ADCCR 0x0E = 0x01 | battery; ≤ 0x7E → "low battery" |
 | Port P2.0 | 0x02 bit 0 | front button (active low): paper feed, or self-test at power-on |
-| Ports P0/P1 | 0x00/0x01 | head strobe and motor phases, written from tables by the TC1 interrupt |
+| Ports P0/P1 | 0x00/0x01 (QFP pins 3–18) | the 16 head strobe lines, one per band row, written from tables by the TC1 interrupt; wired to the transistor arrays IC5/IC6 (board photo) |
 
 ### Interrupt vectors
 
