@@ -15,7 +15,7 @@ Tags: **C** = code-traced, or reproduced by running the firmware in `../emulator
 
 The build stops on a duplicate name, a name that is not on an instruction or block start, a data block that overlaps traced code, or a byte round trip that does not give the ROM back (md5 `aa393ec87ccb4220200255ab5adf8ac9`). Short branch targets inside routines keep automatic names (`Lxxxx`, `Jxxxx` for jump-table targets).
 
-Board check (owner's photos): IC2 is a TMP87PM40AF (the OTP version, QFP-64), IC3 a Sanyo LC3564BM-70 8K x 8 SRAM, and QFP pins 3-18 (P00-P17) go to the two transistor arrays IC5/IC6 that drive the head. The pin numbers in `sfr.csv` come from the datasheet pinout. Still to check on the board: the 7-pin connector (encoder P50, cam sensor P51, motor P52), P53, TH1 on AIN0 and the battery divider on AIN1.
+Board check: the owner's photos and the complete schematic and PCB of the IF-GBP-02 board ([RWeick/IF-GBP-02-Gameboy-Printer](https://github.com/RWeick/IF-GBP-02-Gameboy-Printer)) give every MCU pin's net; the pin descriptions in `sfr.csv` come from it. The firmware meaning of each signal is checked in the emulator. P5.3 (power hold) is the only port bit whose effect is inferred: on the schematic it drives the supply that feeds the head and LED1, and the firmware only ever clears it.
 
 ## Names not yet tagged C (58)
 

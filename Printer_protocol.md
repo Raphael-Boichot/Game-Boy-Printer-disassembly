@@ -50,11 +50,12 @@ Boot (0x8000): `di`, `ld SP,$043F`, watchdog disabled by writing 0xB1 to WDTCR2 
 | Checksum / byte counter | 0x0414 / 0x0416 | running 16-bit sum, payload bytes left |
 | Status register | 0x007C | internal, bit-reversed status byte |
 | SIO2 buffer | 0x0FF8–0x0FFF | Game Boy link (receive and transmit) |
-| External image SRAM | ports P3 (addr lo), P4 (addr hi \| 0xE0), P7 (data), P2.1/P2.2/P5.4 (strobes) | 0x1680 bytes used. Read routine A48F, write routine A4A4 |
-| ADC channel 0 | ADCCR 0x0E = 0x00, result 0x0F | temperature: outside 0x35–0xD7 → "other error" (0x40); indexes the heat-time tables (higher reading = longer strobes, as for an NTC thermistor read colder). Probably TH1 on the main board |
-| ADC channel 1 | ADCCR 0x0E = 0x01 | battery; ≤ 0x7E → "low battery" |
-| Port P2.0 | 0x02 bit 0 | front button (active low): paper feed, or self-test at power-on |
-| Ports P0/P1 | 0x00/0x01 (QFP pins 3–18) | the 16 head strobe lines, one per band row, written from tables by the TC1 interrupt; wired to the transistor arrays IC5/IC6 (board photo) |
+| External image SRAM | IC3 (LH5164 / LC3564, 8K x 8): P3 = A0–A7, P4.0–4.4 = A8–A12, P7 = D0–D7, P2.1 /WE, P2.2 /CE1, P5.4 /OE | 0x1680 bytes used. Read routine A48F, write routine A4A4 |
+| ADC channel 0 | ADCCR 0x0E = 0x00, result 0x0F | thermistor TH1 on P60 (to GND, 10 kΩ pull-up): outside 0x35–0xD7 → "other error" (0x40); indexes the heat-time tables (colder = higher reading = longer strobes) |
+| ADC channel 1 | ADCCR 0x0E = 0x01 | battery through the divider R26/R27 on P61; ≤ 0x7E → "low battery" |
+| Port P2 bit 0 | 0x02 bit 0 | front button SW1 (P20, also the INT5 pin: wakes the CPU from idle) |
+| Port P5 | 0x05 | bit0 encoder (CN1 pin 3 through Q10, INT3); bit1 cam sensor (CN1 pin 5, INT4); bit2 motor (Q6–Q9 drive CN1 pin 2: 0 = run, 1 = brake); bit3 power hold (supply of the head and LED1; cleared after long idle and on low battery: inferred) |
+| Ports P0/P1 | 0x00/0x01 (QFP pins 3–18) | the 16 head strobe lines, one per band row, written from tables by the TC1 interrupt; P00–P07 → TD62593A IC6 → head connector CN2 pins 18–11, P10–P17 → IC5 → CN2 pins 10–3; CN2 pins 1–2 = head supply |
 
 ### Interrupt vectors
 

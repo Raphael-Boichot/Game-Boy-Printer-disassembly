@@ -1,17 +1,17 @@
 addr,name,desc
-00,P0,port 0 (QFP pins 3-10): head strobe lines for band rows 0-7 (bit n = row n); wired to the transistor arrays IC5/IC6 (board)
-01,P1,port 1 (QFP pins 11-18): head strobe lines for band rows 8-15; wired to IC5/IC6 (board)
-02,P2,port 2: bit0 front button (P20 = INT5/STOP pin 19; 0 = pressed); bit1 SRAM /WE (P21/XTIN pin 21); bit2 SRAM /CE (P22/XTOUT pin 22)
-03,P3,port 3: SRAM address low
-04,P4,port 4: bits 0-4 SRAM address high (written OR 0xE0); bits 5-7 SIO2
-05,P5,port 5: bit0 encoder (P50 = INT3/TC3 pin 44); bit1 cam sensor (P51 = INT4/TC4 pin 45); bit2 motor (0 = run); bit3 ?; bit4 SRAM /OE
+00,P0,port 0 (QFP pins 3-10): head strobe lines for band rows 0-7 (bit n = row n); P00-P07 -> TD62593A IC6 -> head connector CN2 pins 18-11 (schematic: RWeick/IF-GBP-02-Gameboy-Printer)
+01,P1,port 1 (QFP pins 11-18): head strobe lines for band rows 8-15; P10-P17 -> TD62593A IC5 -> CN2 pins 10-3
+02,P2,port 2: bit0 front button SW1 (P20 = INT5 pin 19; 0 = pressed; pull-up R24); bit1 SRAM /WE (P21 pin 21); bit2 SRAM /CE1 (P22 pin 22)
+03,P3,port 3: SRAM address A0-A7
+04,P4,"port 4: bits 0-4 SRAM address A8-A12 (written OR 0xE0); bits 5-7 SIO2 (P45 SCK2 -> link pin 5, P46 SI2 <- link pin 3, P47 SO2 -> link pin 2)"
+05,P5,"port 5: bit0 encoder (P50 = INT3: motor connector CN1 pin 3 through transistor Q10); bit1 cam sensor (P51 = INT4: CN1 pin 5, pull-up R29); bit2 motor (P52 -> Q8/Q9 -> Q6/Q7 -> CN1 pin 2; 0 = run, 1 = brake); bit3 power hold (P53 -> Q14 -> Q4/Q5: keeps the head supply and LED1 on; the firmware only clears it); bit4 SRAM /OE (P54)"
 06,P6,port 6
-07,P7,port 7: SRAM data bus
+07,P7,port 7: SRAM data bus D0-D7
 0A,P0CR,port 0 direction
 0B,P1CR,port 1 direction
 0C,P6CR,port 6 direction
 0D,P7CR,port 7 direction (0xFF = output for SRAM writes)
-0E,ADCCR,A/D control: low bits channel (0 = AIN0/P60 pin 50 temperature: other error 0x40 outside 0x35-0xD7 and strobe base time; 1 = AIN1/P61 pin 51 battery: low battery 0x80 at 0x7E or below); bit6 start; bit7 end of conversion
+0E,ADCCR,"A/D control: low bits channel (0 = AIN0/P60: thermistor TH1 to GND with 10k pull-up R28 - other error 0x40 outside 0x35-0xD7, strobe base time; 1 = AIN1/P61: battery through divider R26/R27 - low battery 0x80 at 0x7E or below); bit6 start; bit7 end of conversion"
 0F,ADCDR,A/D result
 10,TREG1A,timer 1 register A (16-bit): strobe tick length in us
 12,TREG1B,timer 1 register B

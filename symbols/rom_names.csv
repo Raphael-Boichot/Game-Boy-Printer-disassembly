@@ -8,7 +8,7 @@ addr,name,tag,note
 82D0,Main_Tick,C,work done once per 10.24 ms tick (flag E0.7)
 82DC,Main_IdleResetTimer,C,counts ActivityTimer while not busy; wrap = reset as Init
 8379,Main_StartDelay,I,
-8505,Main_LowBattery,I,low-battery handling
+8505,Main_LowBattery,I,low battery reported and its timer expired: clears P5.3 (power hold)
 8529,Main_CamWatchdog,C,jam if the cam sensor does not change within 13 ticks (high) / 51 ticks (low)
 8564,Main_Commands,C,run the commands posted by the receiver (CmdRequests)
 857B,Cmd_Init,C,"clear image memory, decoder, image-full, unprocessed (unless jammed), break block"
@@ -47,7 +47,7 @@ AAE6,Int_INT5_ButtonWake,I,bare reti: the front button (P20 = INT5 pin) is enabl
 AAE7,Int_INT4_CamSensor,C,cam sensor rising edge: MechFlags.CamSeen
 AAED,Int_INT3_Encoder,C,"encoder pulse: start a strobe burst, then run the mechanism state"
 AB62,Mech_Dispatch,C,jump through the state table with MechState
-ABA3,Mech_State00_Idle,I,
+ABA3,Mech_State00_Idle,I,idle: counts PowerOffTimer and clears P5.3 (power hold) when it overflows
 ABAE,Mech_State01_Column,C,"print states 01-10: one pixel column per state, 16 states per cycle, 10 cycles per band"
 AC06,Mech_State02_Column,C,
 AC43,Mech_State03_Column,C,

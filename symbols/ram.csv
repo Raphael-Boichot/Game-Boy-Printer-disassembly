@@ -59,6 +59,7 @@ addr,size,name,tag,desc
 03F4,32,RingBuf,C,receive ring buffer (serial interrupt -> decoder)
 0414,2,PktChecksum,C,running checksum
 0416,2,PktRemaining,C,payload bytes left
+0418,1,PowerOffTimer,I,counted up in the idle mechanism state; on overflow P5.3 (power hold) is cleared
 0419,2,HeatCurvePtr,C,pointer to the heat-compensation curve (0xDB88 or 0xDC7B)
 041B,1,BattAtStart,I,battery reading at job start
 041C,1,ActivityTimer,C,reloaded with 0xF3 by every received byte; idle reset when it wraps
