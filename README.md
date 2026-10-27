@@ -1,5 +1,5 @@
 # Game-Boy-Printer-disassembly
-Disassembly of the Game Boy Camera, TMP87C840 Toshiba ROM version. Work in progress
+Disassembly of the Game Boy Printer, TMP87C840 Toshiba ROM version. A side quest of the [Game Boy Camera disassembly](https://github.com/Raphael-Boichot/Game-Boy-Camera-disassembly).
 
 ## The board (IF-GBP-02)
 
