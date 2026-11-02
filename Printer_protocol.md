@@ -1,6 +1,6 @@
 # Game Boy Printer firmware: protocol reference
 
-*Reverse-engineered from the printer's mask ROM (Toshiba TMP87C840, 32 KB, `TMP87C840_Toshiba_printer_ROM.bin`, md5 `aa393ec87ccb4220200255ab5adf8ac9`). 2026-10-25. AI work waiting for human validation: written from static reading of the code, then checked by running this ROM in a TLCS-870 emulator (`emulator/`, section 14); nothing has been tested on a real printer yet.*
+*Reverse-engineered from the printer's mask ROM (Toshiba TMP87C840, 32 KB, `TMP87C840_Toshiba_printer_ROM.bin`, md5 `aa393ec87ccb4220200255ab5adf8ac9`). Started 2026-10-25, finished 2026-11-02. AI work: written from static reading of the code, then checked by running this ROM in a TLCS-870 emulator (`emulator/`, section 14) and against strobe measurements on a real printer by [Furrtek](https://furrtek.org/?a=gbprinter&i=2). The points that still need a real printer are listed in section 12.*
 
 Evidence tags as in the [Game Boy Camera disassembly](https://github.com/Raphael-Boichot/Game-Boy-Camera-disassembly): **C** = code-traced (read in straight-line code) or reproduced by running the firmware in the emulator, **I** = inferred, **?** = inconclusive. Section 12 gives the tag of each group of findings; section 14 lists what the emulator reproduced.
 
@@ -245,13 +245,13 @@ When the job starts (871D), the firmware reads the head temperature on ADC chann
 
 A temperature reading outside 0x35–0xD7 aborts with "other error" instead. Hotter heads get shorter pulses; the exposure byte only shifts that curve.
 
-How the head is driven (from the code, reproduced in the emulator, timing checked against the owner's scope on a real printer):
+How the head is driven (from the code, reproduced in the emulator, timing checked against [Furrtek](https://furrtek.org/?a=gbprinter&i=2)'s scope measurements on a real printer):
 
 - Each encoder pulse (INT3) starts one strobe **burst**: 33 ticks of timer TC1, each `TREG1A` µs long (about 95–103 µs at exposure 0x40). On every tick the TC1 handler writes the next pair of bytes from two RAM tables (0x0360/0x0383 or 0x03A6/0x03C9, used alternately) to ports P0 and P1. The 16 port lines stay on for as many ticks as the dot's grey level needs.
 - A 640-byte band (16 pixel rows) takes **160 bursts, one per pixel column**. The 16 strobe lines are the band's 16 rows (P0.0 = row 0 … P1.7 = row 15), so each burst prints one 16-dot column and the head sweeps across the 160 columns. In the emulator a black top row lights line P0.0 in all 160 bursts, and a black left column lights all 16 lines in burst 0 only. Bursts are 4.00 ms apart (one pixel column = 4 ms, as on the real printer), and a full 9-band picture takes about 9.9 s. The mechanism states 0x01–0x10 are the column states (16 per cycle, 10 cycles per band); 0x12 starts a band and 0x13 moves to the next one.
 - On-time per burst at exposure 0x40, middle of a full picture (emulator, head-temperature reading ≤ 0x60):
 
-  | Level | Emulator | Real printer (owner's scope) |
+  | Level | Emulator | Real printer (Furrtek's scope) |
   |---|---|---|
   | Black | 1.55 ms | 1.56 ms |
   | Dark grey | 1.20 ms | 1.20 ms |
@@ -381,7 +381,7 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 
 - the low-battery reporting delay (`D9.1`);
 - the effect of P5.3 (cutting the head supply), from the schematic;
-- the cam-sensor period in the emulator (a guess, `emulator/README.md`), so the length of a margin unit is not known. The encoder rate is measured: 4 ms per pixel column (owner's scope).
+- the cam-sensor period in the emulator (a guess, `emulator/README.md`), so the length of a margin unit is not known. The encoder rate is measured: 4 ms per pixel column (Furrtek's scope measurements).
 
 **?** (not resolved):
 

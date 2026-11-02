@@ -142,7 +142,7 @@ need('adc-range', proto, r'outside (0x35–0xD7) → "other error"', ('0x35–0x
 # ---------------------------------------------------------------- statements known to be wrong must not come back
 STALE = ['10 per pixel row', '10 bursts per row', 'regenerates the listing exactly', '30-entry', 'V_FFxx',
          'probably paper', 'Print | 0x0C', 'stops printing within', 'not done: the build only reads', 'Tab_PlaneCombine',
-         'reports 0x80 at power-on']
+         'reports 0x80 at power-on', "owner's scope", 'waiting for human validation']
 for md in ('README.md', 'Printer_protocol.md', 'src/README.md', 'symbols/README.md', 'emulator/README.md'):
     hits = [x for x in STALE if x in rd(md)]
     res('stale', not hits, '%s: %s' % (md, hits if hits else 'no known-wrong statement'))

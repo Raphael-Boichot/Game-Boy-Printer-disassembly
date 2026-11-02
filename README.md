@@ -2,6 +2,8 @@
 Disassembly of the Game Boy Printer, TMP87C840 Toshiba ROM version. 
 A short side quest of the [Game Boy Camera disassembly](https://github.com/Raphael-Boichot/Game-Boy-Camera-disassembly).
 
+**Status: finished (2026-11-02).** All disassembly levels L0–L6 are done (table below): the listing and the source tree rebuild the ROM byte for byte, every routine, table, variable and register is named, and the protocol and head control are documented in [`Printer_protocol.md`](Printer_protocol.md). What still needs a real printer is listed in its section 12.
+
 ## The board (IF-GBP-02)
 
 | [InsideGadgets's photo](https://www.insidegadgets.com/2019/03/03/inside-the-game-boy-pocket-printer/) | Head lines marked (owner's photo) |
@@ -35,7 +37,7 @@ Holding the front button while switching on (port P2.0 read low twice at boot) m
 | [`emulator/`](emulator/) | Emulator that runs this ROM on an emulated TMP87C840 and talks to it like a Game Boy; `claims.py` checks the protocol reference against the firmware (23 checks, all matching) |
 | [`printer_test_image.png`](printer_test_image.png) | The built-in self-test image (ROM 0xDDEE-0xE06D, 160 x 16 px), drawn 4x |
 
-All of this is AI work, from reading the code and running it in the emulator, waiting for validation on real hardware.
+All of this is AI work, from reading the code, running it in the emulator, the board schematic and real strobe measurements; the remaining points to check on real hardware are in `Printer_protocol.md` section 12.
 
 ## Building
 

@@ -3,7 +3,7 @@
 Prints a full 9-band picture of solid black, dark grey and light grey (exposure 0x40, palette 0xE4)
 and reports how long one strobe line (P0.0) stays on per burst, for two head-temperature readings.
 
-Real printer (owner's scope, exposure 64): one pixel = 4 ms; black 1.56 ms, dark 1.20 ms, light 0.96 ms.
+Real printer (Furrtek's scope measurements, https://furrtek.org/?a=gbprinter&i=2, exposure 64): one pixel = 4 ms; black 1.56 ms, dark 1.20 ms, light 0.96 ms.
 usage: python3 strobe_check.py [ROM]
 """
 import copy, sys
