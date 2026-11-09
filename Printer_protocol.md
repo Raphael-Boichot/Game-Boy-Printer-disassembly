@@ -316,7 +316,15 @@ The tick length itself (`TREG1A`, µs) = `Tab_TickCurves*[BandIndex][step]` − 
 - "unprocessed data" (unless jammed);
 - copy count, memory pointers and ring buffer.
 
-This is effectively an Init. So a sender must not pause too long between the last data packet and Print. After a job ends, the status also falls back to 0x00 by itself.
+This is effectively an Init: `Cmd_Init` (857B) clears exactly the same state. So a sender must not pause too long between the last data packet and Print. After a job ends, the status also falls back to 0x00 by itself.
+
+**Init has no shelf life [new].** Init only clears state; it sets no "initialised" flag that a later packet checks. What expires is the job loaded after it, through the idle reset above. In the emulator:
+- data sent 100 ms, 500 ms or 10 s after Init is accepted and prints;
+- a job with no Init at all also prints;
+- data, empty data packet, then a 100 ms pause before Print: prints;
+- the same with a 140 ms pause: the Print reply is 0x10 (the end-of-data packet was wiped) and nothing prints.
+
+Every received byte reloads the timer, so a Game Boy that keeps polling with status packets (0x0F) keeps a loaded job alive indefinitely.
 
 **Idle and serial watchdog.** The printer enters IDLE mode (1 s tick) 133 ms after the last byte when nothing is pending, and the front button or a serial byte wakes it (emulator). If no packet is in progress and the serial port has been quiet for about 123 ms, the firmware re-arms SIO2 in 1-byte mode (`Main_Tick`, `JobFlags.SioRearm`). The firmware has no timed power-off: nothing changes in 4 minutes of idle in the emulator.
 
