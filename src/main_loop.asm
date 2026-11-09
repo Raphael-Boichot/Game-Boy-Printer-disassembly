@@ -1,8 +1,18 @@
 ; Main loop: idle, tick work, watchdogs, command handlers, job start
 
 
+;==============================================================================
+; Main_Loop  [C]
+;   Main loop, start of every pass. Clears the watchdog and turns the head
+;   lines off outside the print states. Enters idle (Main_EnterIdle) only when
+;   nothing is pending: no mechanism state, not busy, no packet in progress,
+;   activity timer expired, serial port idle, no data being decoded, no
+;   unprocessed data, no homing or print request. Otherwise continues at
+;   Main_Wake. Each pass then runs Main_Wake -> Main_Tick -> low-battery
+;   follow-up, commands and job control -> Main_LinePipeline -> Data_Main and
+;   jumps back here.
+;==============================================================================
 Main_Loop:
-; [C] main loop: watchdog clear, idle entry check, then the tick work
         ld (WDTCR2),$4E
         ld A,(MechState)
         jr Z,L80E0
@@ -54,8 +64,16 @@ L8122:
         jrs T,Main_EnterIdle
         jp Main_Wake
 
+;==============================================================================
+; Main_EnterIdle  [C]
+;   Nothing pending: sets SysFlags.Idle, slows TC2 to a 1.0 s tick (TREG2 =
+;   0x03D5) and puts the CPU in IDLE mode (SYSCR2.4). Any enabled interrupt
+;   wakes it: a serial byte, the front button (INT5), the tick or an encoder
+;   pulse. After waking it restores the 10.24 ms tick and, if the slow tick
+;   fired, decays the head-heat model (Heat_DecayIdle) or runs the temperature
+;   and battery check.
+;==============================================================================
 Main_EnterIdle:
-; [C] nothing to do: slow tick (TREG2 0x03D5 = 1.0 s) and IDLE mode until an interrupt
         set (SysFlags).7   ; Idle
         clr (SysFlags).2   ; TickRunning
         ld (TC2CR),$04
@@ -78,8 +96,12 @@ L8154:
         jrs T,Heat_DecayIdle
         jp Main_CheckTempBattery
 
+;==============================================================================
+; Heat_DecayIdle  [C]
+;   Head-heat decay while idle: reads the temperature (ADC channel 0) and
+;   multiplies each of the 16 RowHeat accumulators by Tab_DecayByTemp[t] / 256.
+;==============================================================================
 Heat_DecayIdle:
-; [C] per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
         ld (ADCCR),$00
         set (ADCCR).6
 L815F:
@@ -240,13 +262,23 @@ L815F:
         jrs F,Main_CheckTempBattery
         clr (HL)
 
+;==============================================================================
+; Main_CheckTempBattery  [C]
+;   Periodic temperature and battery check (Sub_CheckTempBattery), then the
+;   normal tick work.
+;==============================================================================
 Main_CheckTempBattery:
-; [C] periodic temperature and battery check (Sub_CheckTempBattery)
         call Sub_CheckTempBattery
         jr Main_Tick
 
+;==============================================================================
+; Main_Wake  [C]
+;   Every pass that does not go idle: clears SysFlags.Idle and reloads
+;   EncoderIdleCount (0xE5). With no job, or during homing and feeds (state 0
+;   or 0x11 and above), checks temperature and battery (Sub_CheckTempBattery).
+;   Falls into Main_Tick.
+;==============================================================================
 Main_Wake:
-; [C] back from idle: clear SysFlags.Idle, reload EncoderIdleCount
         clr (SysFlags).7   ; Idle
         ld HL,EncoderIdleCount
         ld (HL),$E5
@@ -257,8 +289,15 @@ Main_Wake:
 L82CD:
         call Sub_CheckTempBattery
 
+;==============================================================================
+; Main_Tick  [C]
+;   When the 10.24 ms tick flag is set (DecodeFlags.Tick, from Int_TC2_Tick):
+;   low-battery timer, idle-reset timer, serial watchdog, encoder and cam
+;   watchdogs (paper jam), start delay and head-heat decay. Every pass then
+;   continues with the low-battery follow-up, the commands posted by the
+;   receiver (Main_Commands), the job control and the print pipeline.
+;==============================================================================
 Main_Tick:
-; [C] work done once per 10.24 ms tick (flag E0.7)
         clr (DecodeFlags).7   ; Tick
         jrs F,L82D6
         jp L8508
@@ -267,8 +306,15 @@ L82D6:
         jr Z,Main_IdleResetTimer
         inc (LowBatTimer)
 
+;==============================================================================
+; Main_IdleResetTimer  [C]
+;   Idle reset. While not printing, ActivityTimer (reloaded with 0xF3 by every
+;   received byte) counts up once per tick; when it wraps (13 ticks, about
+;   125-133 ms of silence) the printer clears exactly what Init clears: image
+;   memory pointers, image-full, unprocessed (unless jammed), packet error,
+;   break block, copies, decoder and ring buffer.
+;==============================================================================
 Main_IdleResetTimer:
-; [C] counts ActivityTimer while not busy; wrap = reset as Init
         test (Status).6   ; StBusy
         jr F,L8319
         ld HL,ActivityTimer
@@ -349,8 +395,12 @@ L8360:
         clr (Status).5   ; StImageFull
         clr (Status).6   ; StBusy
 
+;==============================================================================
+; Main_StartDelay  [C]
+;   Counts StartDelay from 0xF4 up to 0 (12 ticks, about 123 ms): the pause
+;   before a job, or before the next copy, is allowed to start.
+;==============================================================================
 Main_StartDelay:
-; [C] counts StartDelay (12 ticks, about 123 ms) before a job or the next copy starts
         cmp (StartDelay),$01
         jrs T,L8384
         ld A,(StartDelay)
@@ -384,8 +434,12 @@ L83A5:
         jrs T,Heat_DecayTick
         jp Main_LowBattery
 
+;==============================================================================
+; Heat_DecayTick  [C]
+;   Head-heat decay, once per tick while working: reads the temperature and
+;   multiplies each RowHeat accumulator by Tab_DecayByTemp[t] / 256.
+;==============================================================================
 Heat_DecayTick:
-; [C] per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
         ld (ADCCR),$00
         set (ADCCR).6
 L83B4:
@@ -542,8 +596,14 @@ L83B4:
         addc W,$00
         ld ($D5),WA
 
+;==============================================================================
+; Main_LowBattery  [C]
+;   Low-battery follow-up. Once a reply has carried the low-battery bit
+;   (RxFlags.LowBatReported) and LowBatTimer has run out, or when low battery
+;   is held while idle, clears P5.3 (the head-supply latch, SysFlags.SupplyCut).
+;   P5.3 is never set again.
+;==============================================================================
 Main_LowBattery:
-; [C] after low battery: once reported (and LowBatTimer expired) or held while idle, clear P5.3
         ld (IdleDelay),$9C
 L8508:
         test (Status).0   ; StLowBattery
@@ -567,8 +627,13 @@ L8525:
         set (SysFlags).6   ; SupplyCut
         clr (P5).3
 
+;==============================================================================
+; Main_CamWatchdog  [C]
+;   Cam-sensor watchdog while the motor runs: the cam sensor (P5.1) must change
+;   level within 13 ticks while high and 51 ticks while low (CamTimeout).
+;   Otherwise: paper jam (status 0x20), motor stopped, job aborted.
+;==============================================================================
 Main_CamWatchdog:
-; [C] jam if the cam sensor does not change within 13 ticks (high) / 51 ticks (low)
         test (MechFlags).3   ; MechActive
         jrs F,L8532
         clr (SysFlags).3   ; CamChange
@@ -600,8 +665,13 @@ L854B:
         clr (Status).5   ; StImageFull
         clr (Status).6   ; StBusy
 
+;==============================================================================
+; Main_Commands  [C]
+;   Runs the commands the receiver posted in CmdRequests, one per pass: Init
+;   (Cmd_Init), Print (Cmd_Print), Break (Cmd_Break); a status request needs
+;   no action.
+;==============================================================================
 Main_Commands:
-; [C] run the commands posted by the receiver (CmdRequests)
         clr (CmdRequests).7   ; ReqInit
         jr F,Cmd_Init
         clr (CmdRequests).6   ; ReqPrint
@@ -616,8 +686,14 @@ L8572:
 L8578:
         jp Main_JobControl
 
+;==============================================================================
+; Cmd_Init  [C]
+;   Init: clears the image memory pointers (SlotBase, PrintReadPos,
+;   ImageBytes), the ring buffer, the decoder flags, image-full, unprocessed
+;   (unless jammed), packet error, the break block and the copy count. Nothing
+;   is set, so Init has no time limit; the SRAM contents are not cleared.
+;==============================================================================
 Cmd_Init:
-; [C] clear image memory, decoder, image-full, unprocessed (unless jammed), break block
         clr (SysFlags).0   ; MemFull
         clr (Status).5   ; StImageFull
         clr (DecodeFlags).1   ; Decoding
@@ -640,8 +716,16 @@ L858C:
         ld (RingRd),HL
         jr Main_JobControl
 
+;==============================================================================
+; Cmd_Print  [C]
+;   Print. Ignored while printing, feeding or still decoding data. Takes the 4
+;   arguments from PktArgs: copies (0 or no image data -> Cmd_Print_FeedOnly),
+;   margins (high nibble before, low nibble after), palette (0 = no remapping)
+;   and exposure (> 0x7F -> 0x40; ExposureOffset = Tab_ExposureOffset[e]).
+;   Sets JobFlags.AfterPrint and MechRequests.ReqPrint, clears unprocessed
+;   (unless jammed).
+;==============================================================================
 Cmd_Print:
-; [C] take the 4 print arguments: copies, margins, palette, exposure
         test (JobFlags).1   ; Printing
         jr F,L85F1
         test (JobFlags).2   ; Feeding
@@ -679,8 +763,12 @@ L85E4:
 L85F1:
         jr Main_JobControl
 
+;==============================================================================
+; Cmd_Print_FeedOnly  [C]
+;   Print with 0 copies or no image data: feeds the after-margin only
+;   (FeedOnlyAmount, MechRequests.ReqFeed).
+;==============================================================================
 Cmd_Print_FeedOnly:
-; [C] 0 copies or no image data: feed the after-margin only
         ld A,(HL)
         and A,$0F
         jrs T,L85FB
@@ -689,8 +777,15 @@ Cmd_Print_FeedOnly:
 L85FB:
         jr Main_JobControl
 
+;==============================================================================
+; Cmd_Break  [C]
+;   Break. Sets JobFlags.BreakReq: during a feed or homing, the next encoder
+;   pulse switches to state 0x18 (stop) at once (Int_INT3_Encoder); while
+;   printing, the band in progress is finished first (Mech_State10_Column).
+;   Also sets RxErrFlags.BreakBlock: data packets get a packet error until the
+;   next Init.
+;==============================================================================
 Cmd_Break:
-; [C] stop at the next feed phase; block data until Init
         test (JobFlags).2   ; Feeding
         jrs F,L8605
         test (JobFlags).1   ; Printing
@@ -701,8 +796,13 @@ L8605:
 L8607:
         jr Main_JobControl
 
+;==============================================================================
+; Main_JobControl  [I]
+;   Job control after the commands: end of job (busy cleared, unprocessed
+;   cleared, deferred Init executed), next copy while Copies is not zero, and
+;   the start of a new job (Main_StartJob).
+;==============================================================================
 Main_JobControl:
-; [I] job end, copies, busy flag
         test (MechFlags).3   ; MechActive
         jr T,Main_StartJob
         ld A,(MechState)
@@ -756,8 +856,12 @@ L8653:
 L8659:
         jp Main_LinePipeline
 
+;==============================================================================
+; Main_StartJob  [C]
+;   Starts the requested mechanism job unless an error is set (other error,
+;   paper jam): homing, print or feed.
+;==============================================================================
 Main_StartJob:
-; [C] start a mechanism job if no error
         test (Status).0   ; StLowBattery
         jrs T,L8662
         jp Main_LinePipeline
@@ -773,8 +877,12 @@ L866E:
         clr (MechRequests).0   ; ReqHoming
         jr T,Job_StartFeed
 
+;==============================================================================
+; Job_StartHoming  [C]
+;   Power-on homing request (MechRequests.ReqHoming): motor on, busy, state
+;   0x11 (Mech_State11_Homing).
+;==============================================================================
 Job_StartHoming:
-; [C] state 0x11 (power-on homing)
         test (Status).0   ; StLowBattery
         jrs F,L8685
         ld (ADCCR),$01
@@ -803,8 +911,12 @@ L8685:
         clr (P5).2
         jp Main_LinePipeline
 
+;==============================================================================
+; Job_StartFeed  [C]
+;   Paper feed request (feed only, margin units in FeedLeft): motor on, busy,
+;   state 0x16.
+;==============================================================================
 Job_StartFeed:
-; [C] state 0x16 (feed only)
         clr (MechRequests).1   ; ReqFeed
         jr T,Job_ButtonFeed
         set (JobFlags).2   ; Feeding
@@ -818,8 +930,12 @@ Job_StartFeed:
         set (Status).6   ; StBusy
         jp Main_LinePipeline
 
+;==============================================================================
+; Job_ButtonFeed  [C]
+;   Front button pressed with no job: motor on, busy, state 0x17 (feed while
+;   the button is held).
+;==============================================================================
 Job_ButtonFeed:
-; [C] state 0x17 while the front button is pressed
         ld A,(SelfTest)
         jr NZ,Job_StartPrint
         test (P2).0
@@ -834,8 +950,15 @@ Job_ButtonFeed:
         clr (MechSubState)
         jp Main_LinePipeline
 
+;==============================================================================
+; Job_StartPrint  [C]
+;   Starts a print. Checks the temperature (Job_TempError), computes HeatTime
+;   (Job_SetHeatTime), takes the battery reading at rest (BattAtStart), chooses
+;   the tick curves (cold head if every RowHeat is 0), primes the line buffer
+;   from SRAM and prepares the first column (Line_FirstColumn). Then motor on,
+;   busy, and the top margin (state 0x14) or the first band (state 0x12).
+;==============================================================================
 Job_StartPrint:
-; [C] print: temperature check, heat time, line pipeline set-up
         test (MechRequests).2   ; ReqPrint
         jrs F,L86E6
         jp Main_LinePipeline
@@ -863,15 +986,22 @@ L86FD:
         cmp C,$D7
         jr LE,Job_SetHeatTime
 
+;==============================================================================
+; Job_TempError  [C]
+;   Temperature reading outside 0x35-0xD7: other error (status 0x40), no job.
+;==============================================================================
 Job_TempError:
-; [C] temperature reading outside 0x35-0xD7: other error (0x40)
         ldw (P0),$0000
         set (P5).2
         set (Status).1   ; StOtherError
         jp Main_LinePipeline
 
+;==============================================================================
+; Job_SetHeatTime  [C]
+;   HeatTime = Tab_HeatBaseByTemp[temperature] + ExposureOffset: the base dot
+;   energy for this job.
+;==============================================================================
 Job_SetHeatTime:
-; [C] HeatTime = Tab_HeatBaseByTemp[temp] + ExposureOffset
         ld WA,Tab_HeatBaseByTemp
         ld B,$00
         add WA,BC

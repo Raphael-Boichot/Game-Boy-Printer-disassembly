@@ -1,8 +1,14 @@
 ; Data decoder (main loop side), temperature / battery check, SRAM access, RLE, SRAM layout table
 
 
+;==============================================================================
+; Data_Main  [C]
+;   Data decoder, main-loop side of a data packet. When a new data packet
+;   starts, saves the slot pointers for a rollback and resets the RLE state;
+;   then decodes the bytes the receiver puts in the ring buffer (Data_Loop).
+;   Does nothing while the image memory is full.
+;==============================================================================
 Data_Main:
-; [C] data decoder: runs in the main loop, fed by the ring buffer
         test (DecodeFlags).1   ; Decoding
         jr F,Data_Loop
         clr (DecodeFlags).0   ; DataPending
@@ -30,8 +36,13 @@ LA315:
         ld HL,(SlotOffset)
         ld (SavedSlotOffset),HL
 
+;==============================================================================
+; Data_Loop  [C]
+;   Decodes bytes from the ring buffer (Rle_NextByte) and stores them
+;   (Data_StoreByte) until the receiver has finished the packet; then
+;   commits, pads or rolls back.
+;==============================================================================
 Data_Loop:
-; [C] decode bytes until the packet ends
         ld (WDTCR2),$4E
         test (RxErrFlags).7   ; DataAbort
         jr F,Data_Rollback
@@ -49,8 +60,12 @@ LA339:
         test (RxErrFlags).3   ; DecCompressed
         jr T,Data_Commit
 
+;==============================================================================
+; Data_PadSlot  [C]
+;   A compressed packet ended inside a 640-byte slot: fills the rest of the
+;   slot with 0x00 so that every compressed packet covers whole slots.
+;==============================================================================
 Data_PadSlot:
-; [C] compressed packet ended early: pad the slot to 640 bytes with 0x00
         ld (WDTCR2),$4E
         call Sram_StorePos
         ld A,$00
@@ -71,8 +86,13 @@ Data_PadSlot:
         clr (DecodeFlags).0   ; DataPending
         jp Main_Loop
 
+;==============================================================================
+; Data_Rollback  [C]
+;   Bad data packet (checksum error, packet error, inter-byte timeout, or data
+;   while printing): restores SlotBase, ImageBytes and SlotOffset from the
+;   copies saved at the packet start.
+;==============================================================================
 Data_Rollback:
-; [C] bad packet: restore the saved pointers
         ld HL,(SavedSlotBase)
         ld (SlotBase),HL
         ld HL,(SavedImageBytes)
@@ -83,8 +103,11 @@ Data_Rollback:
         clr (DecodeFlags).1   ; Decoding
         jp Main_Loop
 
+;==============================================================================
+; Data_Commit  [C]
+;   Data packet stored: sets unprocessed (status 0x08) and updates ImageBytes.
+;==============================================================================
 Data_Commit:
-; [C] packet stored: set unprocessed (0x08), update ImageBytes
         set (Status).4   ; StUnprocessed
         ld WA,(SlotBase)
         ld HL,(SlotOffset)
@@ -93,8 +116,13 @@ Data_Commit:
         clr (DecodeFlags).1   ; Decoding
         jp Main_Loop
 
+;==============================================================================
+; Data_StoreByte  [C]
+;   Stores one decoded byte at SlotBase + Tab_SramLayout[SlotOffset]
+;   (Sram_StorePos, Sram_Write). After 640 bytes the slot advances; at 0x1680
+;   bytes (9 slots) the memory is full (SysFlags.MemFull).
+;==============================================================================
 Data_StoreByte:
-; [C] store one decoded byte; advance the slot every 640 bytes
         push WA
         ld WA,(SlotOffset)
         cmp WA,$0000
@@ -131,8 +159,14 @@ LA3FC:
         clr (DecodeFlags).0   ; DataPending
         jp Main_Loop
 
+;==============================================================================
+; Sub_CheckTempBattery  [C]
+;   Temperature and battery check. Temperature (ADC 0) outside 0x35-0xD7 ->
+;   other error (0x40); battery (ADC 1) at or below 0x7E -> low battery (0x80),
+;   which also stops a running job and clears P5.3.
+;   Called by: Main_CheckTempBattery, Main_Wake
+;==============================================================================
 Sub_CheckTempBattery:
-; [C] temperature (other error) and battery (low battery) checks
         test (JobFlags).5   ; BattCheckDue
         jr F,LA45D
         test (JobFlags).7   ; BattSample
@@ -178,8 +212,13 @@ LA45B:
 LA45D:
         ret
 
+;==============================================================================
+; Sub_PrimeLineBuf  [C]
+;   Before a print: clears the line buffer and preloads 0x120 bytes from SRAM
+;   (LineBufWr = 0x0220, LineBufRd = 0x0100).
+;   Called by: Job_SetHeatTime
+;==============================================================================
 Sub_PrimeLineBuf:
-; [C] clear LineBuf and preload 0x120 bytes from SRAM (LineBufWr = 0x0220, LineBufRd = 0x0100)
         ld (P2),$07
         ld (P7CR),$00
         ld HL,LineBuf
@@ -202,8 +241,13 @@ LA477:
         ldw (LineBufRd),$0100
         ret
 
+;==============================================================================
+; Sram_Read  [C]
+;   Reads one SRAM byte: address BC on P3 (A0-A7) and P4 (A8-A12), /CE and /OE
+;   low, A = P7.
+;   Called by: Main_RefillLineBuf, Sub_PrimeLineBuf, Boot_SramTest
+;==============================================================================
 Sram_Read:
-; [C] A = SRAM[BC]
         ld (P3),C
         ld A,B
         or A,$E0
@@ -217,8 +261,13 @@ Sram_Read:
         set (P2).2
         ret
 
+;==============================================================================
+; Sram_Write  [C]
+;   Writes A to SRAM address BC: P7 as output, address on P3/P4, /CE low, a /WE
+;   pulse on P2.1.
+;   Called by: Data_PadSlot, Data_StoreByte, Boot_SramTest, SelfTest_Load
+;==============================================================================
 Sram_Write:
-; [C] SRAM[BC] = A
         ld (P7CR),$FF
         ld (P7),A
         ld (P3),C
@@ -235,8 +284,15 @@ Sram_Write:
         ld (P7CR),$00
         ret
 
+;==============================================================================
+; Rle_NextByte  [C]
+;   Next decoded data byte. Uncompressed packets: the next ring-buffer byte.
+;   Compressed: RLE, a control byte below 0x80 starts c+1 literal bytes, 0x80
+;   or above repeats the next byte (c & 0x7F) + 2 times. CF = 1 when no byte is
+;   available yet.
+;   Called by: Data_Loop
+;==============================================================================
 Rle_NextByte:
-; [C] next decoded byte from the ring buffer (CF = 1: none yet)
         test (RxErrFlags).3   ; DecCompressed
         jr F,LA4DF
         ld WA,(RingWr)
@@ -333,8 +389,13 @@ LA562:
         clr CF
         ret
 
+;==============================================================================
+; Sram_StorePos  [C]
+;   SRAM address of the next stored byte: SlotBase + Tab_SramLayout[SlotOffset].
+;   The table reorders the tile bytes of a band into print order.
+;   Called by: Data_PadSlot, Data_StoreByte
+;==============================================================================
 Sram_StorePos:
-; [C] SRAM position of the next packet byte: SlotBase + Tab_SramLayout[SlotOffset]
         ld C,A
         ld WA,(SlotOffset)
         inc WA

@@ -54,6 +54,22 @@ for r in rows('rom_names.csv'):
 types = sorted((H(r['start']), H(r['end']), r) for r in rows('rom_types.csv'))
 roots = [H(r['addr']) for r in rows('roots.csv')]
 
+# routine comments: '@ ADDR' then text lines (symbols/comments.txt)
+comments = {}
+cur = None
+for line in open(os.path.join(SYMD, 'comments.txt')).read().splitlines():
+    if line.startswith('#'):
+        continue
+    if line.startswith('@ '):
+        cur = H(line[2:].strip()); comments[cur] = []; continue
+    if cur is not None:
+        comments[cur].append(line.rstrip())
+for a in comments:
+    while comments[a] and not comments[a][-1]:
+        comments[a].pop()
+    if a not in names:
+        errors.append('comment at %04X has no name in rom_names.csv' % a)
+
 allnames = [r['name'] for r in sfr.values()] + [r['name'] for r in ram.values()] + [r['name'] for r in names.values()]
 dups = {n for n in allnames if allnames.count(n) > 1}
 if dups:
@@ -107,6 +123,25 @@ while todo:
         a += I.n
 
 starts = set(code)
+code_names = sorted(a for a in names if a in code)
+
+
+def owner(site):
+    best = None
+    for n in code_names:
+        if n <= site:
+            best = n
+        else:
+            break
+    return best
+
+
+callers = {}
+for site, I in code.items():
+    for t in I.call:
+        o = owner(site)
+        if o is not None:
+            callers.setdefault(t, set()).add(o)
 covered = set()
 for a, I in code.items():
     covered.update(range(a, a + I.n))
@@ -220,9 +255,16 @@ while a < 0x10000:
         if a in lab:
             if a in names or a in VEC:
                 out.append('')
+            if a in comments:
+                out.append(';' + '=' * 78)
+                out.append('; %s  [%s]' % (lab[a], names[a]['tag']))
+                out += [(';   ' + x) if x else ';' for x in comments[a]]
+                if a in callers:
+                    out.append(';   Called by: ' + ', '.join(names[c]['name'] for c in sorted(callers[a])))
+                out.append(';' + '=' * 78)
             out.append('%s:' % lab[a])
             c = comment_for(a)
-            if c:
+            if c and a not in comments:
                 out.append(c)
         t, cm = render(I)
         out.append('  %04X  %-10s %s%s' % (a, m[a:a + I.n].hex(), t, ('   ; ' + cm) if cm else ''))
@@ -287,3 +329,4 @@ print('names: ROM %d, RAM %d, flag bits %d, SFR %d; tags C %d / I %d / ? %d' % (
     len(names), len(ram), len(bits), len(sfr), tags.count('C'), tags.count('I'), tags.count('?')))
 auto = sum(1 for a in labels if a not in names and a not in VEC)
 print('automatic labels left: %d' % auto)
+print('routine comment blocks: %d' % len(comments))

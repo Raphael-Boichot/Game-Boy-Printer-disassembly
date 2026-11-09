@@ -1,13 +1,23 @@
 ; Main tick, serial packet receiver (coroutine), inter-byte timeout
 
 
+;==============================================================================
+; Int_TC2_Tick  [C]
+;   TC2 interrupt, main tick: sets DecodeFlags.Tick.
+;==============================================================================
 Int_TC2_Tick:
-; [C] main tick: set DecodeFlags.Tick
         set (DecodeFlags).7   ; Tick
         reti
 
+;==============================================================================
+; Int_SIO2_Receiver  [C]
+;   SIO2 interrupt: one byte exchanged with the Game Boy. The packet receiver
+;   is a coroutine: it switches to register bank 3, and either starts a new
+;   packet (Rx_PacketStart) or resumes where it waited for the previous byte
+;   (RxResume). Received bytes are bit-reversed in software (the SIO shifts
+;   LSB first). Restarts TC4 (inter-byte timeout) for every byte.
+;==============================================================================
 Int_SIO2_Receiver:
-; [C] packet receiver (coroutine resumed at RxResume after each byte)
         ld RBS,3
         ld HL,(EIR)
         ld (RxSavedEIR),HL
@@ -18,8 +28,13 @@ Int_SIO2_Receiver:
         jrs T,Rx_PacketStart
         jp (RxResume)
 
+;==============================================================================
+; Rx_PacketStart  [C]
+;   First byte of a packet: must be 0x88 (0x11 bit-reversed), else
+;   Rx_SyncLost. While PowerOnLock is set (homing not finished) the packet is
+;   dropped with a 0xFF reply. Then waits for 0x33 (0xCC bit-reversed).
+;==============================================================================
 Rx_PacketStart:
-; [C] first byte: must be 0x88 (0x11 bit-reversed)
         ld HL,Sio2Buf
         ld A,(HL)
         test (RxErrFlags).4   ; SyncLostBusy
@@ -42,19 +57,32 @@ LB39D:
         jr T,Rx_Header
         jrs T,Rx_SyncLost
 
+;==============================================================================
+; Rx_AbortFF  [C]
+;   Puts 0xFF in the transmit buffer and drops the packet.
+;==============================================================================
 Rx_AbortFF:
-; [C] reply 0xFF and drop the packet
         ld (HL),$FF
 
+;==============================================================================
+; Rx_Exit  [C]
+;   End of a packet: clears RxFlags.RxInPacket so the next byte starts a new
+;   packet.
+;==============================================================================
 Rx_Exit:
-; [C] end of packet
         clr (RxFlags).0   ; RxInPacket
         ld HL,(RxSavedEIR)
         ld (EIR),HL
         reti
 
+;==============================================================================
+; Rx_SyncLost  [C]
+;   Bad first byte: if not printing, posts an Init (line noise while idle wipes
+;   the job); while printing, every packet until the job ends is treated as
+;   junk. Answers 0xFF to every byte until the inter-byte timeout ends the
+;   packet.
+;==============================================================================
 Rx_SyncLost:
-; [C] bad first byte: Init if idle, answer 0xFF until the inter-byte timeout
         test (JobFlags).1   ; Printing
         jrs F,LB3C4
         set (CmdRequests).7   ; ReqInit
@@ -74,8 +102,12 @@ LB3D0:
         ld A,(HL)
         jr LB3C4
 
+;==============================================================================
+; Rx_Header  [C]
+;   Header: command (PktCommand), compression flag, 16-bit length; the checksum
+;   starts with the command byte.
+;==============================================================================
 Rx_Header:
-; [C] command, compression, length; checksum starts
         ld (HL),$00
         ld (TC4CR),$C0
         ld (TC4CR),$D0
@@ -202,8 +234,13 @@ Rx_Header:
         ld WA,(DE)
         ld (HL),WA
 
+;==============================================================================
+; Rx_CheckCommand  [C]
+;   Checks the command: status (0x0F) clears unprocessed when idle; every other
+;   command clears the packet error. Init while busy is ignored (and sets
+;   unprocessed); data goes to Rx_Data; the rest to Rx_OtherCommand.
+;==============================================================================
 Rx_CheckCommand:
-; [C]
         clr (RxErrFlags).1   ; RxIgnored
         clr (RxFlags).3   ; RxIsData
         clr (RxErrFlags).7   ; DataAbort
@@ -237,8 +274,14 @@ LB505:
         jrs T,Rx_Data
         jp Rx_DataWhileBusy
 
+;==============================================================================
+; Rx_Data  [C]
+;   Data packet checks: refused while printing; length 0 = end of data
+;   (image-full, only once and only uncompressed); length >= 0x400 refused;
+;   data after the end-of-data packet, after a Break, or with a compression
+;   flag above 1 -> packet error.
+;==============================================================================
 Rx_Data:
-; [C] data packet checks
         ld HL,PktRemaining
         ld WA,(HL)
         cmp WA,$0400
@@ -300,8 +343,12 @@ LB57D:
         set (DecodeFlags).0   ; DataPending
         set (RxFlags).7   ; RxActive
 
+;==============================================================================
+; Rx_DataPayload  [C]
+;   Stores each payload byte in the ring buffer for the decoder and adds it to
+;   the checksum.
+;==============================================================================
 Rx_DataPayload:
-; [C] payload bytes into the ring buffer
         test (Status).6   ; StBusy
         jrs T,LB599
         set (RxErrFlags).7   ; DataAbort
@@ -355,8 +402,13 @@ LB5CD:
         ld (HL),WA
         jr Rx_DataPayload
 
+;==============================================================================
+; Rx_Checksum  [C]
+;   Checksum bytes. The status byte of the reply is built from Status before
+;   the comparison, so a checksum error is reported one packet late. A bad
+;   checksum on a command other than Print and Break also clears image-full.
+;==============================================================================
 Rx_Checksum:
-; [C] checksum bytes; the status reply is built before the comparison
         call Rx_WaitByte
         ld DE,Sio2Buf
         ld A,(DE)
@@ -452,8 +504,12 @@ LB682:
 LB68F:
         set (Status).7   ; StChecksumErr
 
+;==============================================================================
+; Rx_Reply  [C]
+;   Queues the reply 0x81 and the status byte in the 2-byte SIO2 buffer; the
+;   Game Boy reads them in the next two byte exchanges.
+;==============================================================================
 Rx_Reply:
-; [C] queue 0x81 and the status byte
         ld (SIO2CR1),$67
         ld (SIO2CR2),$01
         ld HL,Sio2Buf
@@ -479,8 +535,13 @@ LB6B7:
         jrs T,Rx_PostCommand
         jp Rx_Exit
 
+;==============================================================================
+; Rx_PostCommand  [C]
+;   After the reply: posts the command to the main loop (CmdRequests) if the
+;   checksum and the packet were good; a data packet with an error is marked
+;   for rollback.
+;==============================================================================
 Rx_PostCommand:
-; [C] post the command to the main loop if no error
         test (RxFlags).3   ; RxIsData
         jr F,LB728
         test (Status).7   ; StChecksumErr
@@ -548,8 +609,12 @@ LB739:
         ld (EIR),HL
         reti
 
+;==============================================================================
+; Rx_OtherCommand  [C]
+;   Print (needs the end-of-data packet and at least 4 argument bytes), Break,
+;   status and unknown commands. Unknown commands are acknowledged and ignored.
+;==============================================================================
 Rx_OtherCommand:
-; [C] print / break / status / unknown
         cmp (HL),$02
         jr F,LB761
         test (JobFlags).1   ; Printing
@@ -585,8 +650,11 @@ LB77B:
         jr CS,Rx_ReadArgs
         set (RxErrFlags).0   ; PacketError
 
+;==============================================================================
+; Rx_ReadArgs  [C]
+;   Keeps up to 4 payload bytes in PktArgs and sums the rest into the checksum.
+;==============================================================================
 Rx_ReadArgs:
-; [C] keep up to 4 payload bytes in PktArgs
         ld HL,PktArgs
         ld (HL+),$00
         ld (HL+),$00
@@ -700,8 +768,11 @@ LB865:
         ld (HL),WA
         jr LB824
 
+;==============================================================================
+; Rx_SkipWithError  [C]
+;   Packet error: sums and drops the payload, then replies normally.
+;==============================================================================
 Rx_SkipWithError:
-; [C] packet error; sum and drop the payload
         set (RxErrFlags).0   ; PacketError
 LB86B:
         call Rx_WaitByte
@@ -742,20 +813,31 @@ LB8AC:
         ld (HL),WA
         jr LB86B
 
+;==============================================================================
+; Rx_DataTooLong  [C]
+;   Data length 0x400 or more: uncompressed -> packet error; compressed ->
+;   dropped silently.
+;==============================================================================
 Rx_DataTooLong:
-; [C] length >= 0x400
         ld HL,PktCommand
         ld A,(HL+1)
         jr NZ,LB8D1
         set (RxErrFlags).0   ; PacketError
         jr LB8D1
 
+;==============================================================================
+; Rx_DataWhileBusy  [C]
+;   Data packet while printing: the payload is skipped (Rx_IgnorePayload).
+;==============================================================================
 Rx_DataWhileBusy:
-; [C]
         set (RxFlags).7   ; RxActive
 
+;==============================================================================
+; Rx_IgnorePayload  [C]
+;   Ignored packet: the payload is summed (or skipped while busy) and the reply
+;   is sent.
+;==============================================================================
 Rx_IgnorePayload:
-; [C] ignored packet: payload summed (or skipped while busy)
         set (RxErrFlags).1   ; RxIgnored
         test (Status).6   ; StBusy
         jr F,LB916
@@ -860,8 +942,11 @@ LB96F:
         ld (TC4CR),$D0
         jp Rx_Reply
 
+;==============================================================================
+; Sub_BitReverse_Unused  [C]
+;   Bit reversal of A. Never called: the receiver inlines the same loop.
+;==============================================================================
 Sub_BitReverse_Unused:
-; [C] unreferenced: A = bit-reversed A (the receiver inlines the same code); dead
         shrc A
         rolc W
         shrc A
@@ -881,8 +966,13 @@ Sub_BitReverse_Unused:
         ld A,W
         ret
 
+;==============================================================================
+; Int_TC4_ByteTimeout  [C]
+;   TC4 interrupt, no byte for 5.12 ms: aborts the packet in progress (the next
+;   byte must be 0x88), resets the SIO2 buffer, and marks a data packet for
+;   rollback.
+;==============================================================================
 Int_TC4_ByteTimeout:
-; [C] no byte for 5.12 ms: abort the packet, roll back data
         ld (TC4CR),$C0
         ld (TREG4),$14
         clr (RxFlags).0   ; RxInPacket
@@ -893,8 +983,14 @@ Int_TC4_ByteTimeout:
         clr (RxFlags).7   ; RxActive
         reti
 
+;==============================================================================
+; Rx_WaitByte  [C]
+;   Waits for the next byte: saves the caller's return address in RxResume,
+;   sets RxFlags.RxInPacket and leaves the interrupt. The next SIO2 interrupt
+;   continues after the call.
+;   Called by: Rx_PacketStart, Rx_SyncLost, Rx_Header, Rx_DataPayload, Rx_Checksum, Rx_Reply, Rx_ReadArgs, Rx_SkipWithError, Rx_IgnorePayload
+;==============================================================================
 Rx_WaitByte:
-; [C] save the return address in RxResume and leave the interrupt
         set (RxFlags).0   ; RxInPacket
         pop HL
         ld (RxResume),HL

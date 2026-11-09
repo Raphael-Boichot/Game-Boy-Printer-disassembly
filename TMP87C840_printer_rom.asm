@@ -180,8 +180,19 @@ Sio2Buf          equ $0FF8   ; [C] 8 byte(s). SIO2 data buffer (shared transmit 
 
         org $8000
 
+;==============================================================================
+; Reset  [C]
+;   Power-on entry. Disables interrupts, sets the stack to 0x043F, switches the
+;   watchdog off (WDTCR2 = 0xB1), sets the port directions and levels, clears
+;   RAM 0x0048-0x043F, and sets the power-on flags (PowerOnLock, ReqHoming).
+;   Then: SRAM test (Boot_SramTest), timers TC2 (10.24 ms tick) and TC4
+;   (inter-byte timeout), SIO2 in 8-bit transmit/receive mode with external
+;   clock, interrupt enables, a first battery reading, and the self-test check:
+;   front button held at power-on -> SelfTest = 1 and SelfTest_Load. Falls into
+;   Main_Loop. With a low battery at power-on the homing never runs, so the
+;   printer keeps answering 0xFF (PowerOnLock).
+;==============================================================================
 Reset:
-; [C] boot: stack, watchdog off, ports, RAM clear, SRAM test, timers, SIO2, battery check, self-test check
   8000  483a       di
   8002  fa3f04     ld SP,$043F
   8005  2c3800     ld (SYSCR1),$00
@@ -243,8 +254,12 @@ L803B:
   80A2  2cf501     ld (SelfTest),$01
   80A5  fcaddd     call SelfTest_Load
 
+;==============================================================================
+; Boot_SettleDelay  [C]
+;   Busy-wait (WA counts up to 0) so the supply settles before the first
+;   battery reading.
+;==============================================================================
 Boot_SettleDelay:
-; [C] 65,536-step busy-wait before the first battery reading
   80A8  140000     ld WA,$0000
 L80AB:
   80AB  10         inc WA
@@ -274,8 +289,18 @@ L80C5:
 L80D2:
   80D2  2c340f     ld (WDTCR1),$0F
 
+;==============================================================================
+; Main_Loop  [C]
+;   Main loop, start of every pass. Clears the watchdog and turns the head
+;   lines off outside the print states. Enters idle (Main_EnterIdle) only when
+;   nothing is pending: no mechanism state, not busy, no packet in progress,
+;   activity timer expired, serial port idle, no data being decoded, no
+;   unprocessed data, no homing or print request. Otherwise continues at
+;   Main_Wake. Each pass then runs Main_Wake -> Main_Tick -> low-battery
+;   follow-up, commands and job control -> Main_LinePipeline -> Data_Main and
+;   jumps back here.
+;==============================================================================
 Main_Loop:
-; [C] main loop: watchdog clear, idle entry check, then the tick work
   80D5  2c354e     ld (WDTCR2),$4E
   80D8  2273       ld A,(MechState)
   80DA  d004       jr Z,L80E0
@@ -327,8 +352,16 @@ L8122:
   8124  82         jrs T,Main_EnterIdle
   8125  febb82     jp Main_Wake
 
+;==============================================================================
+; Main_EnterIdle  [C]
+;   Nothing pending: sets SysFlags.Idle, slows TC2 to a 1.0 s tick (TREG2 =
+;   0x03D5) and puts the CPU in IDLE mode (SYSCR2.4). Any enabled interrupt
+;   wakes it: a serial byte, the front button (INT5), the tick or an encoder
+;   pulse. After waking it restores the 10.24 ms tick and, if the slow tick
+;   fired, decays the head-heat model (Heat_DecayIdle) or runs the temperature
+;   and battery check.
+;==============================================================================
 Main_EnterIdle:
-; [C] nothing to do: slow tick (TREG2 0x03D5 = 1.0 s) and IDLE mode until an interrupt
   8128  4771       set (SysFlags).7   ; Idle
   812A  4a71       clr (SysFlags).2   ; TickRunning
   812C  2c1504     ld (TC2CR),$04
@@ -351,8 +384,12 @@ L8154:
   8156  82         jrs T,Heat_DecayIdle
   8157  feb682     jp Main_CheckTempBattery
 
+;==============================================================================
+; Heat_DecayIdle  [C]
+;   Head-heat decay while idle: reads the temperature (ADC channel 0) and
+;   multiplies each of the 16 RowHeat accumulators by Tab_DecayByTemp[t] / 256.
+;==============================================================================
 Heat_DecayIdle:
-; [C] per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
   815A  2c0e00     ld (ADCCR),$00
   815D  460e       set (ADCCR).6
 L815F:
@@ -513,13 +550,23 @@ L815F:
   82B4  a0         jrs F,Main_CheckTempBattery
   82B5  2f         clr (HL)
 
+;==============================================================================
+; Main_CheckTempBattery  [C]
+;   Periodic temperature and battery check (Sub_CheckTempBattery), then the
+;   normal tick work.
+;==============================================================================
 Main_CheckTempBattery:
-; [C] periodic temperature and battery check (Sub_CheckTempBattery)
   82B6  fc09a4     call Sub_CheckTempBattery
   82B9  fb15       jr Main_Tick
 
+;==============================================================================
+; Main_Wake  [C]
+;   Every pass that does not go idle: clears SysFlags.Idle and reloads
+;   EncoderIdleCount (0xE5). With no job, or during homing and feeds (state 0
+;   or 0x11 and above), checks temperature and battery (Sub_CheckTempBattery).
+;   Falls into Main_Tick.
+;==============================================================================
 Main_Wake:
-; [C] back from idle: clear SysFlags.Idle, reload EncoderIdleCount
   82BB  4f71       clr (SysFlags).7   ; Idle
   82BD  171804     ld HL,EncoderIdleCount
   82C0  2de5       ld (HL),$E5
@@ -530,8 +577,15 @@ Main_Wake:
 L82CD:
   82CD  fc09a4     call Sub_CheckTempBattery
 
+;==============================================================================
+; Main_Tick  [C]
+;   When the 10.24 ms tick flag is set (DecodeFlags.Tick, from Int_TC2_Tick):
+;   low-battery timer, idle-reset timer, serial watchdog, encoder and cam
+;   watchdogs (paper jam), start delay and head-heat decay. Every pass then
+;   continues with the low-battery follow-up, the commands posted by the
+;   receiver (Main_Commands), the job control and the print pipeline.
+;==============================================================================
 Main_Tick:
-; [C] work done once per 10.24 ms tick (flag E0.7)
   82D0  4fe0       clr (DecodeFlags).7   ; Tick
   82D2  a2         jrs F,L82D6
   82D3  fe0885     jp L8508
@@ -540,8 +594,15 @@ L82D6:
   82D8  d002       jr Z,Main_IdleResetTimer
   82DA  20e8       inc (LowBatTimer)
 
+;==============================================================================
+; Main_IdleResetTimer  [C]
+;   Idle reset. While not printing, ActivityTimer (reloaded with 0xF3 by every
+;   received byte) counts up once per tick; when it wraps (13 ticks, about
+;   125-133 ms of silence) the printer clears exactly what Init clears: image
+;   memory pointers, image-full, unprocessed (unless jammed), packet error,
+;   break block, copies, decoder and ring buffer.
+;==============================================================================
 Main_IdleResetTimer:
-; [C] counts ActivityTimer while not busy; wrap = reset as Init
   82DC  de7c       test (Status).6   ; StBusy
   82DE  d739       jr F,L8319
   82E0  171c04     ld HL,ActivityTimer
@@ -622,8 +683,12 @@ L8360:
   8375  4d7c       clr (Status).5   ; StImageFull
   8377  4e7c       clr (Status).6   ; StBusy
 
+;==============================================================================
+; Main_StartDelay  [C]
+;   Counts StartDelay from 0xF4 up to 0 (12 ticks, about 123 ms): the pause
+;   before a job, or before the next copy, is allowed to start.
+;==============================================================================
 Main_StartDelay:
-; [C] counts StartDelay (12 ticks, about 123 ms) before a job or the next copy starts
   8379  e0f67701   cmp (StartDelay),$01
   837D  85         jrs T,L8384
   837E  22f6       ld A,(StartDelay)
@@ -657,8 +722,12 @@ L83A5:
   83AB  82         jrs T,Heat_DecayTick
   83AC  fe0585     jp Main_LowBattery
 
+;==============================================================================
+; Heat_DecayTick  [C]
+;   Head-heat decay, once per tick while working: reads the temperature and
+;   multiplies each RowHeat accumulator by Tab_DecayByTemp[t] / 256.
+;==============================================================================
 Heat_DecayTick:
-; [C] per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
   83AF  2c0e00     ld (ADCCR),$00
   83B2  460e       set (ADCCR).6
 L83B4:
@@ -815,8 +884,14 @@ L83B4:
   84FF  e97000     addc W,$00
   8502  f0d510     ld ($D5),WA
 
+;==============================================================================
+; Main_LowBattery  [C]
+;   Low-battery follow-up. Once a reply has carried the low-battery bit
+;   (RxFlags.LowBatReported) and LowBatTimer has run out, or when low battery
+;   is held while idle, clears P5.3 (the head-supply latch, SysFlags.SupplyCut).
+;   P5.3 is never set again.
+;==============================================================================
 Main_LowBattery:
-; [C] after low battery: once reported (and LowBatTimer expired) or held while idle, clear P5.3
   8505  2cf79c     ld (IdleDelay),$9C
 L8508:
   8508  d87c       test (Status).0   ; StLowBattery
@@ -840,8 +915,13 @@ L8525:
   8525  4671       set (SysFlags).6   ; SupplyCut
   8527  4b05       clr (P5).3
 
+;==============================================================================
+; Main_CamWatchdog  [C]
+;   Cam-sensor watchdog while the motor runs: the cam sensor (P5.1) must change
+;   level within 13 ticks while high and 51 ticks while low (CamTimeout).
+;   Otherwise: paper jam (status 0x20), motor stopped, job aborted.
+;==============================================================================
 Main_CamWatchdog:
-; [C] jam if the cam sensor does not change within 13 ticks (high) / 51 ticks (low)
   8529  db70       test (MechFlags).3   ; MechActive
   852B  a5         jrs F,L8532
   852C  4b71       clr (SysFlags).3   ; CamChange
@@ -873,8 +953,13 @@ L854B:
   8560  4d7c       clr (Status).5   ; StImageFull
   8562  4e7c       clr (Status).6   ; StBusy
 
+;==============================================================================
+; Main_Commands  [C]
+;   Runs the commands the receiver posted in CmdRequests, one per pass: Init
+;   (Cmd_Init), Print (Cmd_Print), Break (Cmd_Break); a status request needs
+;   no action.
+;==============================================================================
 Main_Commands:
-; [C] run the commands posted by the receiver (CmdRequests)
   8564  4fdb       clr (CmdRequests).7   ; ReqInit
   8566  d713       jr F,Cmd_Init
   8568  4edb       clr (CmdRequests).6   ; ReqPrint
@@ -889,8 +974,14 @@ L8572:
 L8578:
   8578  fe0986     jp Main_JobControl
 
+;==============================================================================
+; Cmd_Init  [C]
+;   Init: clears the image memory pointers (SlotBase, PrintReadPos,
+;   ImageBytes), the ring buffer, the decoder flags, image-full, unprocessed
+;   (unless jammed), packet error, the break block and the copy count. Nothing
+;   is set, so Init has no time limit; the SRAM contents are not cleared.
+;==============================================================================
 Cmd_Init:
-; [C] clear image memory, decoder, image-full, unprocessed (unless jammed), break block
   857B  4871       clr (SysFlags).0   ; MemFull
   857D  4d7c       clr (Status).5   ; StImageFull
   857F  49e0       clr (DecodeFlags).1   ; Decoding
@@ -913,8 +1004,16 @@ L858C:
   85A6  f0de13     ld (RingRd),HL
   85A9  fb5e       jr Main_JobControl
 
+;==============================================================================
+; Cmd_Print  [C]
+;   Print. Ignored while printing, feeding or still decoding data. Takes the 4
+;   arguments from PktArgs: copies (0 or no image data -> Cmd_Print_FeedOnly),
+;   margins (high nibble before, low nibble after), palette (0 = no remapping)
+;   and exposure (> 0x7F -> 0x40; ExposureOffset = Tab_ExposureOffset[e]).
+;   Sets JobFlags.AfterPrint and MechRequests.ReqPrint, clears unprocessed
+;   (unless jammed).
+;==============================================================================
 Cmd_Print:
-; [C] take the 4 print arguments: copies, margins, palette, exposure
   85AB  d9e1       test (JobFlags).1   ; Printing
   85AD  d742       jr F,L85F1
   85AF  dae1       test (JobFlags).2   ; Feeding
@@ -952,8 +1051,12 @@ L85E4:
 L85F1:
   85F1  fb16       jr Main_JobControl
 
+;==============================================================================
+; Cmd_Print_FeedOnly  [C]
+;   Print with 0 copies or no image data: feeds the after-margin only
+;   (FeedOnlyAmount, MechRequests.ReqFeed).
+;==============================================================================
 Cmd_Print_FeedOnly:
-; [C] 0 copies or no image data: feed the after-margin only
   85F3  23         ld A,(HL)
   85F4  740f       and A,$0F
   85F6  83         jrs T,L85FB
@@ -962,8 +1065,15 @@ Cmd_Print_FeedOnly:
 L85FB:
   85FB  fb0c       jr Main_JobControl
 
+;==============================================================================
+; Cmd_Break  [C]
+;   Break. Sets JobFlags.BreakReq: during a feed or homing, the next encoder
+;   pulse switches to state 0x18 (stop) at once (Int_INT3_Encoder); while
+;   printing, the band in progress is finished first (Mech_State10_Column).
+;   Also sets RxErrFlags.BreakBlock: data packets get a packet error until the
+;   next Init.
+;==============================================================================
 Cmd_Break:
-; [C] stop at the next feed phase; block data until Init
   85FD  dae1       test (JobFlags).2   ; Feeding
   85FF  a4         jrs F,L8605
   8600  d9e1       test (JobFlags).1   ; Printing
@@ -974,8 +1084,13 @@ L8605:
 L8607:
   8607  fb00       jr Main_JobControl
 
+;==============================================================================
+; Main_JobControl  [I]
+;   Job control after the commands: end of job (busy cleared, unprocessed
+;   cleared, deferred Init executed), next copy while Copies is not zero, and
+;   the start of a new job (Main_StartJob).
+;==============================================================================
 Main_JobControl:
-; [I] job end, copies, busy flag
   8609  db70       test (MechFlags).3   ; MechActive
   860B  d64f       jr T,Main_StartJob
   860D  2273       ld A,(MechState)
@@ -1029,8 +1144,12 @@ L8653:
 L8659:
   8659  fe7a8d     jp Main_LinePipeline
 
+;==============================================================================
+; Main_StartJob  [C]
+;   Starts the requested mechanism job unless an error is set (other error,
+;   paper jam): homing, print or feed.
+;==============================================================================
 Main_StartJob:
-; [C] start a mechanism job if no error
   865C  d87c       test (Status).0   ; StLowBattery
   865E  82         jrs T,L8662
   865F  fe7a8d     jp Main_LinePipeline
@@ -1046,8 +1165,12 @@ L866E:
   866E  487b       clr (MechRequests).0   ; ReqHoming
   8670  d638       jr T,Job_StartFeed
 
+;==============================================================================
+; Job_StartHoming  [C]
+;   Power-on homing request (MechRequests.ReqHoming): motor on, busy, state
+;   0x11 (Mech_State11_Homing).
+;==============================================================================
 Job_StartHoming:
-; [C] state 0x11 (power-on homing)
   8672  d87c       test (Status).0   ; StLowBattery
   8674  af         jrs F,L8685
   8675  2c0e01     ld (ADCCR),$01
@@ -1076,8 +1199,12 @@ L8685:
   86A5  4a05       clr (P5).2
   86A7  fe7a8d     jp Main_LinePipeline
 
+;==============================================================================
+; Job_StartFeed  [C]
+;   Paper feed request (feed only, margin units in FeedLeft): motor on, busy,
+;   state 0x16.
+;==============================================================================
 Job_StartFeed:
-; [C] state 0x16 (feed only)
   86AA  497b       clr (MechRequests).1   ; ReqFeed
   86AC  d617       jr T,Job_ButtonFeed
   86AE  42e1       set (JobFlags).2   ; Feeding
@@ -1091,8 +1218,12 @@ Job_StartFeed:
   86C0  467c       set (Status).6   ; StBusy
   86C2  fe7a8d     jp Main_LinePipeline
 
+;==============================================================================
+; Job_ButtonFeed  [C]
+;   Front button pressed with no job: motor on, busy, state 0x17 (feed while
+;   the button is held).
+;==============================================================================
 Job_ButtonFeed:
-; [C] state 0x17 while the front button is pressed
   86C5  22f5       ld A,(SelfTest)
   86C7  d117       jr NZ,Job_StartPrint
   86C9  d802       test (P2).0
@@ -1107,8 +1238,15 @@ Job_ButtonFeed:
   86DB  2efe       clr (MechSubState)
   86DD  fe7a8d     jp Main_LinePipeline
 
+;==============================================================================
+; Job_StartPrint  [C]
+;   Starts a print. Checks the temperature (Job_TempError), computes HeatTime
+;   (Job_SetHeatTime), takes the battery reading at rest (BattAtStart), chooses
+;   the tick curves (cold head if every RowHeat is 0), primes the line buffer
+;   from SRAM and prepares the first column (Line_FirstColumn). Then motor on,
+;   busy, and the top margin (state 0x14) or the first band (state 0x12).
+;==============================================================================
 Job_StartPrint:
-; [C] print: temperature check, heat time, line pipeline set-up
   86E0  da7b       test (MechRequests).2   ; ReqPrint
   86E2  a2         jrs F,L86E6
   86E3  fe7a8d     jp Main_LinePipeline
@@ -1136,15 +1274,22 @@ L86FD:
   870D  ea77d7     cmp C,$D7
   8710  d40b       jr LE,Job_SetHeatTime
 
+;==============================================================================
+; Job_TempError  [C]
+;   Temperature reading outside 0x35-0xD7: other error (status 0x40), no job.
+;==============================================================================
 Job_TempError:
-; [C] temperature reading outside 0x35-0xD7: other error (0x40)
   8712  24000000   ldw (P0),$0000
   8716  4205       set (P5).2
   8718  417c       set (Status).1   ; StOtherError
   871A  fe7a8d     jp Main_LinePipeline
 
+;==============================================================================
+; Job_SetHeatTime  [C]
+;   HeatTime = Tab_HeatBaseByTemp[temperature] + ExposureOffset: the base dot
+;   energy for this job.
+;==============================================================================
 Job_SetHeatTime:
-; [C] HeatTime = Tab_HeatBaseByTemp[temp] + ExposureOffset
   871D  14f6ce     ld WA,Tab_HeatBaseByTemp
   8720  3300       ld B,$00
   8722  e931       add WA,BC
@@ -1250,8 +1395,17 @@ L87FD:
   8803  fcc2b9     call Line_CopyColumnSource
   8806  2e82       clr (TileColumnX)
 
+;==============================================================================
+; Line_FirstColumn  [C]
+;   Prepares the first pixel column of a job, the same chain as
+;   Line_NextColumnA/B written out once: copy the tile column
+;   (Line_CopyColumnSource), extract the 16 dots (Line_ExtractColumn),
+;   history codes (Line_ColumnHistory), energy codes (Line_ColumnEnergy), then
+;   for each row adds the dot's heat to RowHeat (Tab_HeatAddByCode,
+;   Tab_HeatAddFreshByTemp after a white dot, IdleCool for a white dot) and
+;   records the printed rows in DotMask.
+;==============================================================================
 Line_FirstColumn:
-; [C] job start: extract, history, energy codes and heat accumulation for the first column
   8808  fc51ba     call Line_ExtractColumn
   880B  fc39bb     call Line_ColumnHistory
   880E  166002     ld DE,ColumnCodes
@@ -1986,8 +2140,15 @@ L8D6F:
   8D76  4370       set (MechFlags).3   ; MechActive
   8D78  467c       set (Status).6   ; StBusy
 
+;==============================================================================
+; Main_LinePipeline  [C]
+;   Print pipeline, run every pass between strobe bursts: when the line buffer
+;   is empty, refill it from SRAM (Main_RefillLineBuf); otherwise, when the
+;   next column is due, prepare it into the strobe table that is not being
+;   fired (Line_NextColumnA or Line_NextColumnB). Continues with the data
+;   decoder (Data_Main).
+;==============================================================================
 Main_LinePipeline:
-; [C] between bursts: refill LineBuf from SRAM when empty, else copy the next tile column and prepare the next column
   8D7A  e07414     ld WA,(LineBufWr)
   8D7D  e07616     ld DE,(LineBufRd)
   8D80  ea37       cmp WA,DE
@@ -2101,8 +2262,13 @@ L8E17:
   8E17  f07612     ld (LineBufRd),DE
   8E1A  2e82       clr (TileColumnX)
 
+;==============================================================================
+; Line_NextColumnA  [I]
+;   Prepares the next pixel column into strobe table A (StrobeA_P0/P1): the
+;   same chain as Line_FirstColumn, unrolled, then writes each row's tick
+;   window with the StrobeA_RowNN routines.
+;==============================================================================
 Line_NextColumnA:
-; [I] same chain as Line_FirstColumn, unrolled, for the next column (strobe tables A)
   8E1C  178700     ld HL,ColumnPixels
   8E1F  164002     ld DE,ColumnSource
   8E22  3007       ld A,$07
@@ -3533,8 +3699,12 @@ L9824:
   9824  f07612     ld (LineBufRd),DE
   9827  2e82       clr (TileColumnX)
 
+;==============================================================================
+; Line_NextColumnB  [I]
+;   Prepares the next pixel column into strobe table B (StrobeB_P0/P1); same as
+;   Line_NextColumnA for the other buffer.
+;==============================================================================
 Line_NextColumnB:
-; [I] same chain for the strobe tables B
   9829  178700     ld HL,ColumnPixels
   982C  164002     ld DE,ColumnSource
   982F  3007       ld A,$07
@@ -4857,14 +5027,23 @@ LA18D:
 LA19B:
   A19B  4170       set (MechFlags).1   ; LineFetch
 
+;==============================================================================
+; Line_TileColumnDone  [C]
+;   After the 8 pixel columns of a tile column: moves to the next tile column;
+;   after 20 tile columns the band is finished (Heat_BandStart).
+;==============================================================================
 Line_TileColumnDone:
-; [C] after 8 pixel columns: next tile column; after 20, a new band
   A19D  28f8       dec (TileColumnsLeft)
   A19F  d003       jr Z,Heat_BandStart
   A1A1  fe9da2     jp Main_RefillLineBuf
 
+;==============================================================================
+; Heat_BandStart  [C]
+;   New band: TileColumnsLeft = 20, clears RowHistory, and removes
+;   Tab_BandCoolByTemp[temperature] from every RowHeat accumulator (the head
+;   cools while the paper moves to the next band).
+;==============================================================================
 Heat_BandStart:
-; [C] new band: clear RowHistory, RowHeat -= Tab_BandCoolByTemp[temperature]
   A1A4  2cf814     ld (TileColumnsLeft),$14
   A1A7  2ea7       clr (RowHistory)
   A1A9  2ea8       clr ($A8)
@@ -4988,8 +5167,12 @@ LA296:
   A296  f0d510     ld ($D5),WA
   A299  24fa0000   ldw (DotMask),$0000
 
+;==============================================================================
+; Main_RefillLineBuf  [C]
+;   Copies the next 32-byte chunks of the image from SRAM (PrintReadPos) into
+;   the line buffer (LineBuf, LineBufWr) until it is full or the image ends.
+;==============================================================================
 Main_RefillLineBuf:
-; [C] copy 32-byte chunks from SRAM into LineBuf while printing
   A29D  de70       test (MechFlags).6   ; LineBufFill
   A29F  d648       jr T,LA2E9
   A2A1  e08314     ld WA,(PrintReadPos)
@@ -5031,8 +5214,14 @@ LA2E9:
 LA2EB:
   A2EB  4e70       clr (MechFlags).6   ; LineBufFill
 
+;==============================================================================
+; Data_Main  [C]
+;   Data decoder, main-loop side of a data packet. When a new data packet
+;   starts, saves the slot pointers for a rollback and resets the RLE state;
+;   then decodes the bytes the receiver puts in the ring buffer (Data_Loop).
+;   Does nothing while the image memory is full.
+;==============================================================================
 Data_Main:
-; [C] data decoder: runs in the main loop, fed by the ring buffer
   A2ED  d9e0       test (DecodeFlags).1   ; Decoding
   A2EF  d736       jr F,Data_Loop
   A2F1  48e0       clr (DecodeFlags).0   ; DataPending
@@ -5060,8 +5249,13 @@ LA315:
   A321  e0e417     ld HL,(SlotOffset)
   A324  f0ee13     ld (SavedSlotOffset),HL
 
+;==============================================================================
+; Data_Loop  [C]
+;   Decodes bytes from the ring buffer (Rle_NextByte) and stores them
+;   (Data_StoreByte) until the receiver has finished the packet; then
+;   commits, pads or rolls back.
+;==============================================================================
 Data_Loop:
-; [C] decode bytes until the packet ends
   A327  2c354e     ld (WDTCR2),$4E
   A32A  dfda       test (RxErrFlags).7   ; DataAbort
   A32C  d754       jr F,Data_Rollback
@@ -5079,8 +5273,12 @@ LA339:
   A347  dbda       test (RxErrFlags).3   ; DecCompressed
   A349  d650       jr T,Data_Commit
 
+;==============================================================================
+; Data_PadSlot  [C]
+;   A compressed packet ended inside a 640-byte slot: fills the rest of the
+;   slot with 0x00 so that every compressed packet covers whole slots.
+;==============================================================================
 Data_PadSlot:
-; [C] compressed packet ended early: pad the slot to 640 bytes with 0x00
   A34B  2c354e     ld (WDTCR2),$4E
   A34E  fc64a5     call Sram_StorePos
   A351  3000       ld A,$00
@@ -5101,8 +5299,13 @@ Data_PadSlot:
   A37D  48e0       clr (DecodeFlags).0   ; DataPending
   A37F  fed580     jp Main_Loop
 
+;==============================================================================
+; Data_Rollback  [C]
+;   Bad data packet (checksum error, packet error, inter-byte timeout, or data
+;   while printing): restores SlotBase, ImageBytes and SlotOffset from the
+;   copies saved at the packet start.
+;==============================================================================
 Data_Rollback:
-; [C] bad packet: restore the saved pointers
   A382  e0ea17     ld HL,(SavedSlotBase)
   A385  f0e213     ld (SlotBase),HL
   A388  e0ec17     ld HL,(SavedImageBytes)
@@ -5113,8 +5316,11 @@ Data_Rollback:
   A396  49e0       clr (DecodeFlags).1   ; Decoding
   A398  fed580     jp Main_Loop
 
+;==============================================================================
+; Data_Commit  [C]
+;   Data packet stored: sets unprocessed (status 0x08) and updates ImageBytes.
+;==============================================================================
 Data_Commit:
-; [C] packet stored: set unprocessed (0x08), update ImageBytes
   A39B  447c       set (Status).4   ; StUnprocessed
   A39D  e0e214     ld WA,(SlotBase)
   A3A0  e0e417     ld HL,(SlotOffset)
@@ -5123,8 +5329,13 @@ Data_Commit:
   A3A8  49e0       clr (DecodeFlags).1   ; Decoding
   A3AA  fed580     jp Main_Loop
 
+;==============================================================================
+; Data_StoreByte  [C]
+;   Stores one decoded byte at SlotBase + Tab_SramLayout[SlotOffset]
+;   (Sram_StorePos, Sram_Write). After 640 bytes the slot advances; at 0x1680
+;   bytes (9 slots) the memory is full (SysFlags.MemFull).
+;==============================================================================
 Data_StoreByte:
-; [C] store one decoded byte; advance the slot every 640 bytes
   A3AD  e807       push WA
   A3AF  e0e414     ld WA,(SlotOffset)
   A3B2  e83f0000   cmp WA,$0000
@@ -5161,8 +5372,14 @@ LA3FC:
   A404  48e0       clr (DecodeFlags).0   ; DataPending
   A406  fed580     jp Main_Loop
 
+;==============================================================================
+; Sub_CheckTempBattery  [C]
+;   Temperature and battery check. Temperature (ADC 0) outside 0x35-0xD7 ->
+;   other error (0x40); battery (ADC 1) at or below 0x7E -> low battery (0x80),
+;   which also stops a running job and clears P5.3.
+;   Called by: Main_CheckTempBattery, Main_Wake
+;==============================================================================
 Sub_CheckTempBattery:
-; [C] temperature (other error) and battery (low battery) checks
   A409  dde1       test (JobFlags).5   ; BattCheckDue
   A40B  d750       jr F,LA45D
   A40D  dfe1       test (JobFlags).7   ; BattSample
@@ -5208,8 +5425,13 @@ LA45B:
 LA45D:
   A45D  05         ret
 
+;==============================================================================
+; Sub_PrimeLineBuf  [C]
+;   Before a print: clears the line buffer and preloads 0x120 bytes from SRAM
+;   (LineBufWr = 0x0220, LineBufRd = 0x0100).
+;   Called by: Job_SetHeatTime
+;==============================================================================
 Sub_PrimeLineBuf:
-; [C] clear LineBuf and preload 0x120 bytes from SRAM (LineBufWr = 0x0220, LineBufRd = 0x0100)
   A45E  2c0207     ld (P2),$07
   A461  2c0d00     ld (P7CR),$00
   A464  170001     ld HL,LineBuf
@@ -5232,8 +5454,13 @@ LA477:
   A48A  24760001   ldw (LineBufRd),$0100
   A48E  05         ret
 
+;==============================================================================
+; Sram_Read  [C]
+;   Reads one SRAM byte: address BC on P3 (A0-A7) and P4 (A8-A12), /CE and /OE
+;   low, A = P7.
+;   Called by: Main_RefillLineBuf, Sub_PrimeLineBuf, Boot_SramTest
+;==============================================================================
 Sram_Read:
-; [C] A = SRAM[BC]
   A48F  f00352     ld (P3),C
   A492  53         ld A,B
   A493  76e0       or A,$E0
@@ -5247,8 +5474,13 @@ Sram_Read:
   A4A1  4202       set (P2).2
   A4A3  05         ret
 
+;==============================================================================
+; Sram_Write  [C]
+;   Writes A to SRAM address BC: P7 as output, address on P3/P4, /CE low, a /WE
+;   pulse on P2.1.
+;   Called by: Data_PadSlot, Data_StoreByte, Boot_SramTest, SelfTest_Load
+;==============================================================================
 Sram_Write:
-; [C] SRAM[BC] = A
   A4A4  2c0dff     ld (P7CR),$FF
   A4A7  2a07       ld (P7),A
   A4A9  f00352     ld (P3),C
@@ -5265,8 +5497,15 @@ Sram_Write:
   A4BC  2c0d00     ld (P7CR),$00
   A4BF  05         ret
 
+;==============================================================================
+; Rle_NextByte  [C]
+;   Next decoded data byte. Uncompressed packets: the next ring-buffer byte.
+;   Compressed: RLE, a control byte below 0x80 starts c+1 literal bytes, 0x80
+;   or above repeats the next byte (c & 0x7F) + 2 times. CF = 1 when no byte is
+;   available yet.
+;   Called by: Data_Loop
+;==============================================================================
 Rle_NextByte:
-; [C] next decoded byte from the ring buffer (CF = 1: none yet)
   A4C0  dbda       test (RxErrFlags).3   ; DecCompressed
   A4C2  d71b       jr F,LA4DF
   A4C4  e0dc14     ld WA,(RingWr)
@@ -5363,8 +5602,13 @@ LA562:
   A562  0c         clr CF
   A563  05         ret
 
+;==============================================================================
+; Sram_StorePos  [C]
+;   SRAM address of the next stored byte: SlotBase + Tab_SramLayout[SlotOffset].
+;   The table reorders the tile bytes of a band into print order.
+;   Called by: Data_PadSlot, Data_StoreByte
+;==============================================================================
 Sram_StorePos:
-; [C] SRAM position of the next packet byte: SlotBase + Tab_SramLayout[SlotOffset]
   A564  5a         ld C,A
   A565  e0e414     ld WA,(SlotOffset)
   A568  10         inc WA
@@ -5462,8 +5706,15 @@ Tab_SramLayout:
   AA5E  70027102720273027402750276027702 dw $0270, $0271, $0272, $0273, $0274, $0275, $0276, $0277
   AA6E  780279027a027b027c027d027e027f02 dw $0278, $0279, $027A, $027B, $027C, $027D, $027E, $027F
 
+;==============================================================================
+; Int_TC1_StrobeTick  [C]
+;   TC1 interrupt, one strobe tick (TREG1A us). Writes the next byte pair of
+;   the current strobe table to P0/P1 (the 16 head dots). After 33 ticks it
+;   clears the ports and stops TC1. On the first burst of a job
+;   (JobFlags.BattSample) it reads the battery under load: low battery at or
+;   below 0x7E, or a sag of 8 below BattAtStart when at or below 0x9C.
+;==============================================================================
 Int_TC1_StrobeTick:
-; [C] TC1: write the next tick bytes to P0/P1; after 33 ticks stop TC1, sample battery
   AA7E  0f01       ld RBS,1
   AA80  63         inc B
   AA81  8b         jrs T,LAA8E
@@ -5503,8 +5754,14 @@ LAAB9:
 LAABF:
   AABF  04         reti
 
+;==============================================================================
+; Int_TC3_BatteryCheck  [C]
+;   TC3 interrupt, battery reading under load during a strobe burst: at or
+;   below 0x7E, turns the head lines off and sets low battery (status 0x80,
+;   RxFlags.LowBatHold). The motor stop and the supply cut follow in the main
+;   loop.
+;==============================================================================
 Int_TC3_BatteryCheck:
-; [C] TC3: battery reading under load
   AAC0  243a0120   ldw (EIR),$2001
   AAC4  2c1a08     ld (TC3CR),$08
   AAC7  2c0e01     ld (ADCCR),$01
@@ -5523,20 +5780,37 @@ LAADD:
   AAE1  243a10fd   ldw (EIR),$FD10
   AAE5  04         reti
 
+;==============================================================================
+; Int_INT5_ButtonWake  [I]
+;   INT5 (front button, P20): bare reti. The interrupt is enabled only to wake
+;   the CPU from IDLE.
+;==============================================================================
 Int_INT5_ButtonWake:
-; [I] bare reti: the front button (P20 = INT5 pin) is enabled as an interrupt only to wake the CPU from IDLE
   AAE6  04         reti
 
+;==============================================================================
+; Int_INT4_CamSensor  [C]
+;   INT4, cam sensor rising edge: if P5.1 still reads 1, sets MechFlags.CamSeen.
+;==============================================================================
 Int_INT4_CamSensor:
-; [C] cam sensor rising edge: MechFlags.CamSeen
   AAE7  d905       test (P5).1
   AAE9  81         jrs T,LAAEC
   AAEA  4270       set (MechFlags).2   ; CamSeen
 LAAEC:
   AAEC  04         reti
 
+;==============================================================================
+; Int_INT3_Encoder  [C]
+;   INT3, paper-motor encoder pulse (one per pixel column, 4 ms). Checks the
+;   pin level and counts the pulse. State 0: runs Mech_State00_Idle. Print
+;   states 0x01-0x10: starts a strobe burst (selects strobe table A or B,
+;   toggled every pulse by MechFlags.StrobeBufB; loads TC1 with the tick
+;   length = current tick curve step minus the heat-soak trim; starts TC1),
+;   then runs the state. States above 0x10 (homing, margins, feeds): a pending
+;   Break switches to state 0x18 (stop) at once; otherwise runs the state
+;   (Mech_Dispatch).
+;==============================================================================
 Int_INT3_Encoder:
-; [C] encoder pulse: start a strobe burst, then run the mechanism state
   AAED  0f02       ld RBS,2
   AAEF  d805       test (P5).0
   AAF1  80         jrs T,LAAF3
@@ -5595,8 +5869,11 @@ LAB2F:
   AB5D  2c1a18     ld (TC3CR),$18
   AB60  2273       ld A,(MechState)
 
+;==============================================================================
+; Mech_Dispatch  [C]
+;   Jumps through the 31-entry state table with MechState (states 0x00-0x1E).
+;==============================================================================
 Mech_Dispatch:
-; [C] jump through the state table with MechState
   AB62  1c         shlc A
   AB63  e1fe       jp (PC+A)
   AB65  a3ab       dw Mech_State00_Idle
@@ -5631,8 +5908,12 @@ Mech_Dispatch:
   AB9F  69b3       dw Mech_StateInvalid
   ABA1  69b3       dw Mech_StateInvalid
 
+;==============================================================================
+; Mech_State00_Idle  [C]
+;   State 0x00, no job: encoder pulses (paper pulled by hand) are counted while
+;   idle; after 27 of them P5.3 is cleared.
+;==============================================================================
 Mech_State00_Idle:
-; [C] encoder pulse with no job: while idle, count EncoderIdleCount; on overflow (27 pulses) clear P5.3
   ABA3  df71       test (SysFlags).7   ; Idle
   ABA5  86         jrs T,LABAD
   ABA6  171804     ld HL,EncoderIdleCount
@@ -5642,8 +5923,14 @@ Mech_State00_Idle:
 LABAD:
   ABAD  04         reti
 
+;==============================================================================
+; Mech_State01_Column  [C]
+;   Print states 0x01-0x10, one per pixel column: each fills the strobe table
+;   for a later column from its block of ColumnCodes, through the 16
+;   Strobe<A|B>_RowNN routines. 16 states make one cycle (two tile columns);
+;   a band is 10 cycles (160 columns).
+;==============================================================================
 Mech_State01_Column:
-; [C] print states 01-10: one pixel column per state, 16 states per cycle, 10 cycles per band
   ABAE  22fc       ld A,(BandIndex)
   ABB0  1c         shlc A
   ABB1  3100       ld W,$00
@@ -6018,8 +6305,15 @@ Mech_State0F_Column:
   AF5B  243a10fd   ldw (EIR),$FD10
   AF5F  04         reti
 
+;==============================================================================
+; Mech_State10_Column  [C]
+;   State 0x10, last column of a cycle: advances LineCounter (the step in the
+;   band's tick curve). At the end of a band (LineCounter = 23) decides what
+;   follows: self-test -> bottom margin; low battery -> stop; image finished
+;   -> after-margin or stop; Break requested -> stop; otherwise next band
+;   (BandIndex + 1, state 0x13).
+;==============================================================================
 Mech_State10_Column:
-; [C] last column state of a cycle
   AF60  2072       inc (LineCounter)
   AF62  e0727717   cmp (LineCounter),$17
   AF66  d33d       jr CC,LAFA5
@@ -6127,8 +6421,15 @@ LB020:
   B05A  243a10fd   ldw (EIR),$FD10
   B05E  04         reti
 
+;==============================================================================
+; Mech_State11_Homing  [C]
+;   State 0x11, power-on homing. Finds the cam sensor edge, runs 27 pulses,
+;   finds the edge again and stops 3 pulses after the sensor drops. Then motor
+;   off, PowerOnLock cleared (packets are answered again) and, if requested,
+;   the self-test print. Releasing the button during homing cancels the
+;   self-test.
+;==============================================================================
 Mech_State11_Homing:
-; [C] power-on homing: find the cam sensor twice, stop 3 pulses after; clears PowerOnLock
   B05F  e0f57700   cmp (SelfTest),$00
   B063  88         jrs T,LB06D
   B064  d802       test (P2).0
@@ -6213,8 +6514,12 @@ LB0F4:
   B0F6  243a10fd   ldw (EIR),$FD10
   B0FA  04         reti
 
+;==============================================================================
+; Mech_State12_BandStart  [C]
+;   State 0x12, band start: 13 encoder pulses before the first column of a
+;   band.
+;==============================================================================
 Mech_State12_BandStart:
-; [C] before each band (13 pulses in the emulator)
   B0FB  2072       inc (LineCounter)
   B0FD  e072770d   cmp (LineCounter),$0D
   B101  d203       jr CS,LB106
@@ -6224,8 +6529,12 @@ LB106:
   B108  243a10fd   ldw (EIR),$FD10
   B10C  04         reti
 
+;==============================================================================
+; Mech_State13_BandAdvance  [C]
+;   State 0x13, between bands: moves the paper to the next band, then back to
+;   state 0x12.
+;==============================================================================
 Mech_State13_BandAdvance:
-; [C] between bands (115 pulses in the emulator)
   B10D  2072       inc (LineCounter)
   B10F  e072778a   cmp (LineCounter),$8A
   B113  d205       jr CS,LB11A
@@ -6236,8 +6545,12 @@ LB11A:
   B11C  243a10fd   ldw (EIR),$FD10
   B120  04         reti
 
+;==============================================================================
+; Mech_State14_TopMargin  [C]
+;   State 0x14, margin before the image: MarginBeforeLeft units (cam
+;   revolutions), then the first band.
+;==============================================================================
 Mech_State14_TopMargin:
-; [C] margin before printing
   B121  17fe00     ld HL,MechSubState
   B124  e37700     cmp (HL),$00
   B127  d715       jr F,LB13E
@@ -6289,8 +6602,12 @@ LB17A:
   B17C  243a10fd   ldw (EIR),$FD10
   B180  04         reti
 
+;==============================================================================
+; Mech_State15_BottomMargin  [C]
+;   State 0x15, margin after the image (MarginAfter units; 3 for the
+;   self-test), then the job ends.
+;==============================================================================
 Mech_State15_BottomMargin:
-; [C] margin after printing (also the self-test)
   B181  17fe00     ld HL,MechSubState
   B184  e37700     cmp (HL),$00
   B187  ad         jrs F,LB196
@@ -6382,8 +6699,11 @@ LB225:
   B227  243a10fd   ldw (EIR),$FD10
   B22B  04         reti
 
+;==============================================================================
+; Mech_State16_FeedOnly  [C]
+;   State 0x16, paper feed for a print with 0 copies (FeedOnlyAmount units).
+;==============================================================================
 Mech_State16_FeedOnly:
-; [C] print with 0 copies
   B22C  17fe00     ld HL,MechSubState
   B22F  e37700     cmp (HL),$00
   B232  d713       jr F,LB247
@@ -6447,8 +6767,11 @@ LB29F:
   B2A1  243a10fd   ldw (EIR),$FD10
   B2A5  04         reti
 
+;==============================================================================
+; Mech_State17_ButtonFeed  [C]
+;   State 0x17, paper feed while the front button is held.
+;==============================================================================
 Mech_State17_ButtonFeed:
-; [C] front button feed
   B2A6  d802       test (P2).0
   B2A8  d625       jr T,LB2CF
   B2AA  d802       test (P2).0
@@ -6518,8 +6841,12 @@ LB321:
   B323  243a10fd   ldw (EIR),$FD10
   B327  04         reti
 
+;==============================================================================
+; Mech_State18_Stop  [C]
+;   State 0x18, stop (low battery or Break): motor off, busy cleared, job
+;   ended.
+;==============================================================================
 Mech_State18_Stop:
-; [C] stop after low battery or Break
   B328  17fe00     ld HL,MechSubState
   B32B  e37700     cmp (HL),$00
   B32E  ae         jrs F,LB33E
@@ -6553,19 +6880,32 @@ LB34C:
   B365  d002       jr Z,Mech_StateInvalid
   B367  427b       set (MechRequests).2   ; ReqPrint
 
+;==============================================================================
+; Mech_StateInvalid  [I]
+;   States 0x19-0x1E (never set): treated as an invalid state.
+;==============================================================================
 Mech_StateInvalid:
-; [I] states 0x19-0x1E
   B369  483a       di
   B36B  243a10fd   ldw (EIR),$FD10
   B36F  04         reti
 
+;==============================================================================
+; Int_TC2_Tick  [C]
+;   TC2 interrupt, main tick: sets DecodeFlags.Tick.
+;==============================================================================
 Int_TC2_Tick:
-; [C] main tick: set DecodeFlags.Tick
   B370  47e0       set (DecodeFlags).7   ; Tick
   B372  04         reti
 
+;==============================================================================
+; Int_SIO2_Receiver  [C]
+;   SIO2 interrupt: one byte exchanged with the Game Boy. The packet receiver
+;   is a coroutine: it switches to register bank 3, and either starts a new
+;   packet (Rx_PacketStart) or resumes where it waited for the previous byte
+;   (RxResume). Received bytes are bit-reversed in software (the SIO shifts
+;   LSB first). Restarts TC4 (inter-byte timeout) for every byte.
+;==============================================================================
 Int_SIO2_Receiver:
-; [C] packet receiver (coroutine resumed at RxResume after each byte)
   B373  0f03       ld RBS,3
   B375  e03a17     ld HL,(EIR)
   B378  f0f013     ld (RxSavedEIR),HL
@@ -6576,8 +6916,13 @@ Int_SIO2_Receiver:
   B386  82         jrs T,Rx_PacketStart
   B387  e0d7fe     jp (RxResume)
 
+;==============================================================================
+; Rx_PacketStart  [C]
+;   First byte of a packet: must be 0x88 (0x11 bit-reversed), else
+;   Rx_SyncLost. While PowerOnLock is set (homing not finished) the packet is
+;   dropped with a 0xFF reply. Then waits for 0x33 (0xCC bit-reversed).
+;==============================================================================
 Rx_PacketStart:
-; [C] first byte: must be 0x88 (0x11 bit-reversed)
   B38A  17f80f     ld HL,Sio2Buf
   B38D  23         ld A,(HL)
   B38E  dcda       test (RxErrFlags).4   ; SyncLostBusy
@@ -6600,19 +6945,32 @@ LB39D:
   B3B1  d62f       jr T,Rx_Header
   B3B3  8a         jrs T,Rx_SyncLost
 
+;==============================================================================
+; Rx_AbortFF  [C]
+;   Puts 0xFF in the transmit buffer and drops the packet.
+;==============================================================================
 Rx_AbortFF:
-; [C] reply 0xFF and drop the packet
   B3B4  2dff       ld (HL),$FF
 
+;==============================================================================
+; Rx_Exit  [C]
+;   End of a packet: clears RxFlags.RxInPacket so the next byte starts a new
+;   packet.
+;==============================================================================
 Rx_Exit:
-; [C] end of packet
   B3B6  48d9       clr (RxFlags).0   ; RxInPacket
   B3B8  e0f017     ld HL,(RxSavedEIR)
   B3BB  f03a13     ld (EIR),HL
   B3BE  04         reti
 
+;==============================================================================
+; Rx_SyncLost  [C]
+;   Bad first byte: if not printing, posts an Init (line noise while idle wipes
+;   the job); while printing, every packet until the job ends is treated as
+;   junk. Answers 0xFF to every byte until the inter-byte timeout ends the
+;   packet.
+;==============================================================================
 Rx_SyncLost:
-; [C] bad first byte: Init if idle, answer 0xFF until the inter-byte timeout
   B3BF  d9e1       test (JobFlags).1   ; Printing
   B3C1  a1         jrs F,LB3C4
   B3C2  47db       set (CmdRequests).7   ; ReqInit
@@ -6632,8 +6990,12 @@ LB3D0:
   B3DF  23         ld A,(HL)
   B3E0  fbe2       jr LB3C4
 
+;==============================================================================
+; Rx_Header  [C]
+;   Header: command (PktCommand), compression flag, 16-bit length; the checksum
+;   starts with the command byte.
+;==============================================================================
 Rx_Header:
-; [C] command, compression, length; checksum starts
   B3E2  2d00       ld (HL),$00
   B3E4  2c1cc0     ld (TC4CR),$C0
   B3E7  2c1cd0     ld (TC4CR),$D0
@@ -6760,8 +7122,13 @@ Rx_Header:
   B4D0  e214       ld WA,(DE)
   B4D2  f310       ld (HL),WA
 
+;==============================================================================
+; Rx_CheckCommand  [C]
+;   Checks the command: status (0x0F) clears unprocessed when idle; every other
+;   command clears the packet error. Init while busy is ignored (and sets
+;   unprocessed); data goes to Rx_Data; the rest to Rx_OtherCommand.
+;==============================================================================
 Rx_CheckCommand:
-; [C]
   B4D4  49da       clr (RxErrFlags).1   ; RxIgnored
   B4D6  4bd9       clr (RxFlags).3   ; RxIsData
   B4D8  4fda       clr (RxErrFlags).7   ; DataAbort
@@ -6795,8 +7162,14 @@ LB505:
   B507  82         jrs T,Rx_Data
   B508  febcb8     jp Rx_DataWhileBusy
 
+;==============================================================================
+; Rx_Data  [C]
+;   Data packet checks: refused while printing; length 0 = end of data
+;   (image-full, only once and only uncompressed); length >= 0x400 refused;
+;   data after the end-of-data packet, after a Break, or with a compression
+;   flag above 1 -> packet error.
+;==============================================================================
 Rx_Data:
-; [C] data packet checks
   B50B  171604     ld HL,PktRemaining
   B50E  e314       ld WA,(HL)
   B510  e83f0004   cmp WA,$0400
@@ -6858,8 +7231,12 @@ LB57D:
   B584  40e0       set (DecodeFlags).0   ; DataPending
   B586  47d9       set (RxFlags).7   ; RxActive
 
+;==============================================================================
+; Rx_DataPayload  [C]
+;   Stores each payload byte in the ring buffer for the decoder and adds it to
+;   the checksum.
+;==============================================================================
 Rx_DataPayload:
-; [C] payload bytes into the ring buffer
   B588  de7c       test (Status).6   ; StBusy
   B58A  8d         jrs T,LB599
   B58B  47da       set (RxErrFlags).7   ; DataAbort
@@ -6913,8 +7290,13 @@ LB5CD:
   B5EB  f310       ld (HL),WA
   B5ED  fb99       jr Rx_DataPayload
 
+;==============================================================================
+; Rx_Checksum  [C]
+;   Checksum bytes. The status byte of the reply is built from Status before
+;   the comparison, so a checksum error is reported one packet late. A bad
+;   checksum on a command other than Print and Break also clears image-full.
+;==============================================================================
 Rx_Checksum:
-; [C] checksum bytes; the status reply is built before the comparison
   B5EF  fcb4b9     call Rx_WaitByte
   B5F2  16f80f     ld DE,Sio2Buf
   B5F5  e258       ld A,(DE)
@@ -7010,8 +7392,12 @@ LB682:
 LB68F:
   B68F  477c       set (Status).7   ; StChecksumErr
 
+;==============================================================================
+; Rx_Reply  [C]
+;   Queues the reply 0x81 and the status byte in the 2-byte SIO2 buffer; the
+;   Game Boy reads them in the next two byte exchanges.
+;==============================================================================
 Rx_Reply:
-; [C] queue 0x81 and the status byte
   B691  2c2267     ld (SIO2CR1),$67
   B694  2c2301     ld (SIO2CR2),$01
   B697  17f80f     ld HL,Sio2Buf
@@ -7037,8 +7423,13 @@ LB6B7:
   B6C5  82         jrs T,Rx_PostCommand
   B6C6  feb6b3     jp Rx_Exit
 
+;==============================================================================
+; Rx_PostCommand  [C]
+;   After the reply: posts the command to the main loop (CmdRequests) if the
+;   checksum and the packet were good; a data packet with an error is marked
+;   for rollback.
+;==============================================================================
 Rx_PostCommand:
-; [C] post the command to the main loop if no error
   B6C9  dbd9       test (RxFlags).3   ; RxIsData
   B6CB  d75b       jr F,LB728
   B6CD  df7c       test (Status).7   ; StChecksumErr
@@ -7106,8 +7497,12 @@ LB739:
   B740  f03a13     ld (EIR),HL
   B743  04         reti
 
+;==============================================================================
+; Rx_OtherCommand  [C]
+;   Print (needs the end-of-data packet and at least 4 argument bytes), Break,
+;   status and unknown commands. Unknown commands are acknowledged and ignored.
+;==============================================================================
 Rx_OtherCommand:
-; [C] print / break / status / unknown
   B744  e37702     cmp (HL),$02
   B747  d718       jr F,LB761
   B749  d9e1       test (JobFlags).1   ; Printing
@@ -7143,8 +7538,11 @@ LB77B:
   B784  d202       jr CS,Rx_ReadArgs
   B786  40da       set (RxErrFlags).0   ; PacketError
 
+;==============================================================================
+; Rx_ReadArgs  [C]
+;   Keeps up to 4 payload bytes in PktArgs and sums the rest into the checksum.
+;==============================================================================
 Rx_ReadArgs:
-; [C] keep up to 4 payload bytes in PktArgs
   B788  17f003     ld HL,PktArgs
   B78B  f62c00     ld (HL+),$00
   B78E  f62c00     ld (HL+),$00
@@ -7258,8 +7656,11 @@ LB865:
   B865  f310       ld (HL),WA
   B867  fbbb       jr LB824
 
+;==============================================================================
+; Rx_SkipWithError  [C]
+;   Packet error: sums and drops the payload, then replies normally.
+;==============================================================================
 Rx_SkipWithError:
-; [C] packet error; sum and drop the payload
   B869  40da       set (RxErrFlags).0   ; PacketError
 LB86B:
   B86B  fcb4b9     call Rx_WaitByte
@@ -7300,20 +7701,31 @@ LB8AC:
   B8AC  f310       ld (HL),WA
   B8AE  fbbb       jr LB86B
 
+;==============================================================================
+; Rx_DataTooLong  [C]
+;   Data length 0x400 or more: uncompressed -> packet error; compressed ->
+;   dropped silently.
+;==============================================================================
 Rx_DataTooLong:
-; [C] length >= 0x400
   B8B0  17ec03     ld HL,PktCommand
   B8B3  e40158     ld A,(HL+1)
   B8B6  d119       jr NZ,LB8D1
   B8B8  40da       set (RxErrFlags).0   ; PacketError
   B8BA  fb15       jr LB8D1
 
+;==============================================================================
+; Rx_DataWhileBusy  [C]
+;   Data packet while printing: the payload is skipped (Rx_IgnorePayload).
+;==============================================================================
 Rx_DataWhileBusy:
-; [C]
   B8BC  47d9       set (RxFlags).7   ; RxActive
 
+;==============================================================================
+; Rx_IgnorePayload  [C]
+;   Ignored packet: the payload is summed (or skipped while busy) and the reply
+;   is sent.
+;==============================================================================
 Rx_IgnorePayload:
-; [C] ignored packet: payload summed (or skipped while busy)
   B8BE  41da       set (RxErrFlags).1   ; RxIgnored
   B8C0  de7c       test (Status).6   ; StBusy
   B8C2  d752       jr F,LB916
@@ -7418,8 +7830,11 @@ LB96F:
   B97E  2c1cd0     ld (TC4CR),$D0
   B981  fe91b6     jp Rx_Reply
 
+;==============================================================================
+; Sub_BitReverse_Unused  [C]
+;   Bit reversal of A. Never called: the receiver inlines the same loop.
+;==============================================================================
 Sub_BitReverse_Unused:
-; [C] unreferenced: A = bit-reversed A (the receiver inlines the same code); dead
   B984  1d         shrc A
   B985  e91e       rolc W
   B987  1d         shrc A
@@ -7439,8 +7854,13 @@ Sub_BitReverse_Unused:
   B99C  51         ld A,W
   B99D  05         ret
 
+;==============================================================================
+; Int_TC4_ByteTimeout  [C]
+;   TC4 interrupt, no byte for 5.12 ms: aborts the packet in progress (the next
+;   byte must be 0x88), resets the SIO2 buffer, and marks a data packet for
+;   rollback.
+;==============================================================================
 Int_TC4_ByteTimeout:
-; [C] no byte for 5.12 ms: abort the packet, roll back data
   B99E  2c1cc0     ld (TC4CR),$C0
   B9A1  2c1b14     ld (TREG4),$14
   B9A4  48d9       clr (RxFlags).0   ; RxInPacket
@@ -7451,8 +7871,14 @@ Int_TC4_ByteTimeout:
   B9B1  4fd9       clr (RxFlags).7   ; RxActive
   B9B3  04         reti
 
+;==============================================================================
+; Rx_WaitByte  [C]
+;   Waits for the next byte: saves the caller's return address in RxResume,
+;   sets RxFlags.RxInPacket and leaves the interrupt. The next SIO2 interrupt
+;   continues after the call.
+;   Called by: Rx_PacketStart, Rx_SyncLost, Rx_Header, Rx_DataPayload, Rx_Checksum, Rx_Reply, Rx_ReadArgs, Rx_SkipWithError, Rx_IgnorePayload
+;==============================================================================
 Rx_WaitByte:
-; [C] save the return address in RxResume and leave the interrupt
   B9B4  40d9       set (RxFlags).0   ; RxInPacket
   B9B6  eb06       pop HL
   B9B8  f0d713     ld (RxResume),HL
@@ -7460,8 +7886,13 @@ Rx_WaitByte:
   B9BE  f03a13     ld (EIR),HL
   B9C1  04         reti
 
+;==============================================================================
+; Line_CopyColumnSource  [C]
+;   Copies the 32 bytes of the tile column being printed (2 stacked tiles x 8
+;   rows x 2 bit planes) from the line buffer to ColumnSource.
+;   Called by: Job_SetHeatTime
+;==============================================================================
 Line_CopyColumnSource:
-; [C] copy the 32 bytes (2 stacked tiles x 16 rows x 2 planes) of the tile column being printed
   B9C2  174002     ld HL,ColumnSource
   B9C5  e227       ld (HL),(DE)
   B9C7  13         inc HL
@@ -7565,8 +7996,14 @@ LBA4D:
   BA4D  f07612     ld (LineBufRd),DE
   BA50  05         ret
 
+;==============================================================================
+; Line_ExtractColumn  [C]
+;   Takes pixel TileColumnX of each of the 16 rows from ColumnSource (low and
+;   high bit planes), giving 16 dot values 0-3 in ColumnPixels, then applies
+;   the palette (0 = no remapping).
+;   Called by: Line_FirstColumn
+;==============================================================================
 Line_ExtractColumn:
-; [C] pixel x = TileColumnX of each of the 16 rows -> ColumnPixels (0-3); ends with the palette remap
   BA51  178700     ld HL,ColumnPixels
   BA54  164002     ld DE,ColumnSource
   BA57  3007       ld A,$07
@@ -7710,8 +8147,14 @@ LBB32:
 LBB38:
   BB38  05         ret
 
+;==============================================================================
+; Line_ColumnHistory  [C]
+;   For each row: RowHistory = previous dot << 4 | current dot, and
+;   ColumnHistCode = Tab_EnergyByHistory[RowHistory]: less energy for a dot
+;   that was already printed in the previous column.
+;   Called by: Line_FirstColumn
+;==============================================================================
 Line_ColumnHistory:
-; [C] RowHistory = previous dot << 4 | current dot; ColumnHistCode = Tab_EnergyByHistory[RowHistory]
   BB39  17b6cc     ld HL,Tab_EnergyByHistory
   BB3C  2287       ld A,(ColumnPixels)
   BB3E  e0a708     rold A,(RowHistory)
@@ -7779,8 +8222,15 @@ Line_ColumnHistory:
   BBE9  e526a6     ld ($A6),(HL+C)
   BBEC  05         ret
 
+;==============================================================================
+; Line_ColumnEnergy  [C]
+;   For each row: energy code = HeatTime + Tab_HeatCorr<grey>[RowHeatInt]
+;   (correction by the element's modelled heat) + the history code, clamped to
+;   0-0x64, written to ColumnCodes. Tab_DotTicks turns a code into the dot's
+;   first tick and tick count.
+;   Called by: Line_FirstColumn
+;==============================================================================
 Line_ColumnEnergy:
-; [C] code = HeatTime + Tab_HeatCorr<grey>[RowHeatInt] + ColumnHistCode, clamped 0-0x64, into ColumnCodes
   BBED  2282       ld A,(TileColumnX)
   BBEF  01         swap A
   BBF0  3100       ld W,$00
@@ -8208,8 +8658,16 @@ Tab_HeatCorrPtrs:
 ; words BEB6-BEBD: [I] Tab_ColumnTabPtrs
   BEB6  76d476d576d676d7                 dw $D476, $D576, $D676, $D776
 
+;==============================================================================
+; StrobeA_Row00  [C]
+;   Strobe-table writers (32 routines, BEBE-CA3F): StrobeA_Row00-15 and
+;   StrobeB_Row00-15, one per head dot and table. Each reads the dot's energy
+;   code, looks up (first tick, tick count) in Tab_DotTicks, and jumps into a
+;   ladder of `set (HL+).bit` instructions that turns the dot's bit on for that
+;   many consecutive ticks of the 33-tick table.
+;   Called by: Line_FirstColumn, Mech_State02_Column, Mech_State04_Column, Mech_State06_Column, Mech_State08_Column, Mech_State0A_Column, Mech_State0C_Column, Mech_State0E_Column, Mech_State10_Column
+;==============================================================================
 StrobeA_Row00:
-; [C] set P0.0 (band row 0) in strobe table A for the dot's tick count
   BEBE  e258       ld A,(DE)
   BEC0  1c         shlc A
   BEC1  12         inc DE
@@ -10710,8 +11168,14 @@ Tab_TickTrimBySoak:
   DD6C  0b0b0b0b0c0c0c0c0c0d0d0d0d0d0e0e db $0B, $0B, $0B, $0B, $0C, $0C, $0C, $0C, $0C, $0D, $0D, $0D, $0D, $0D, $0E, $0E
   DD7C  0e0e0e0f0f0f0f0f0f               db $0E, $0E, $0E, $0F, $0F, $0F, $0F, $0F, $0F
 
+;==============================================================================
+; Boot_SramTest  [C]
+;   Power-on SRAM test: writes an incrementing pattern to the 0x1680 image
+;   bytes and reads it back; a mismatch is other error (0x40). The pattern
+;   stays in memory.
+;   Called by: Reset
+;==============================================================================
 Boot_SramTest:
-; [C] write and read back 0x1680 SRAM bytes; failure = other error (0x40)
   DD85  150000     ld BC,$0000
   DD88  3500       ld D,$00
 LDD8A:
@@ -10736,8 +11200,13 @@ LDDAA:
   DDAA  417c       set (Status).1   ; StOtherError
   DDAC  05         ret
 
+;==============================================================================
+; SelfTest_Load  [C]
+;   Self-test: copies the 640-byte band Gfx_SelfTestBand into SRAM in print
+;   order, as if one data packet had been received (ImageBytes = 0x280).
+;   Called by: Reset
+;==============================================================================
 SelfTest_Load:
-; [C] copy the self-test band to SRAM as one data packet
   DDAD  17eedd     ld HL,Gfx_SelfTestBand
   DDB0  150000     ld BC,$0000
   DDB3  3100       ld W,$00
@@ -10817,12 +11286,18 @@ Gfx_SelfTestBand:
   E04E  3c3c18188080808018003c003c001800 db $3C, $3C, $18, $18, $80, $80, $80, $80, $18, $00, $3C, $00, $3C, $00, $18, $00
   E05E  c31bc31bc31bc31bc31bc31bc31bc31b db $C3, $1B, $C3, $1B, $C3, $1B, $C3, $1B, $C3, $1B, $C3, $1B, $C3, $1B, $C3, $1B
 
+;==============================================================================
+; Int_Unused_Reti  [C]
+;   Unused interrupt vectors: reti.
+;==============================================================================
 Int_Unused_Reti:
-; [C]
   E06E  04         reti
 
+;==============================================================================
+; Int_Unused_Retn  [C]
+;   Unused interrupt vectors (INTWDT, INTSW): retn.
+;==============================================================================
 Int_Unused_Retn:
-; [C]
   E06F  e804       retn
 
 ; fill E071-FFDF: [C] unused, 0xFF

@@ -1,8 +1,15 @@
 ; Strobe timer, battery check, button / cam / encoder interrupts and the mechanism states
 
 
+;==============================================================================
+; Int_TC1_StrobeTick  [C]
+;   TC1 interrupt, one strobe tick (TREG1A us). Writes the next byte pair of
+;   the current strobe table to P0/P1 (the 16 head dots). After 33 ticks it
+;   clears the ports and stops TC1. On the first burst of a job
+;   (JobFlags.BattSample) it reads the battery under load: low battery at or
+;   below 0x7E, or a sag of 8 below BattAtStart when at or below 0x9C.
+;==============================================================================
 Int_TC1_StrobeTick:
-; [C] TC1: write the next tick bytes to P0/P1; after 33 ticks stop TC1, sample battery
         ld RBS,1
         inc B
         jrs T,LAA8E
@@ -42,8 +49,14 @@ LAAB9:
 LAABF:
         reti
 
+;==============================================================================
+; Int_TC3_BatteryCheck  [C]
+;   TC3 interrupt, battery reading under load during a strobe burst: at or
+;   below 0x7E, turns the head lines off and sets low battery (status 0x80,
+;   RxFlags.LowBatHold). The motor stop and the supply cut follow in the main
+;   loop.
+;==============================================================================
 Int_TC3_BatteryCheck:
-; [C] TC3: battery reading under load
         ldw (EIR),$2001
         ld (TC3CR),$08
         ld (ADCCR),$01
@@ -62,20 +75,37 @@ LAADD:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Int_INT5_ButtonWake  [I]
+;   INT5 (front button, P20): bare reti. The interrupt is enabled only to wake
+;   the CPU from IDLE.
+;==============================================================================
 Int_INT5_ButtonWake:
-; [I] bare reti: the front button (P20 = INT5 pin) is enabled as an interrupt only to wake the CPU from IDLE
         reti
 
+;==============================================================================
+; Int_INT4_CamSensor  [C]
+;   INT4, cam sensor rising edge: if P5.1 still reads 1, sets MechFlags.CamSeen.
+;==============================================================================
 Int_INT4_CamSensor:
-; [C] cam sensor rising edge: MechFlags.CamSeen
         test (P5).1
         jrs T,LAAEC
         set (MechFlags).2   ; CamSeen
 LAAEC:
         reti
 
+;==============================================================================
+; Int_INT3_Encoder  [C]
+;   INT3, paper-motor encoder pulse (one per pixel column, 4 ms). Checks the
+;   pin level and counts the pulse. State 0: runs Mech_State00_Idle. Print
+;   states 0x01-0x10: starts a strobe burst (selects strobe table A or B,
+;   toggled every pulse by MechFlags.StrobeBufB; loads TC1 with the tick
+;   length = current tick curve step minus the heat-soak trim; starts TC1),
+;   then runs the state. States above 0x10 (homing, margins, feeds): a pending
+;   Break switches to state 0x18 (stop) at once; otherwise runs the state
+;   (Mech_Dispatch).
+;==============================================================================
 Int_INT3_Encoder:
-; [C] encoder pulse: start a strobe burst, then run the mechanism state
         ld RBS,2
         test (P5).0
         jrs T,LAAF3
@@ -134,8 +164,11 @@ LAB2F:
         ld (TC3CR),$18
         ld A,(MechState)
 
+;==============================================================================
+; Mech_Dispatch  [C]
+;   Jumps through the 31-entry state table with MechState (states 0x00-0x1E).
+;==============================================================================
 Mech_Dispatch:
-; [C] jump through the state table with MechState
         shlc A
         jp (PC+A)
         dw Mech_State00_Idle
@@ -170,8 +203,12 @@ Mech_Dispatch:
         dw Mech_StateInvalid
         dw Mech_StateInvalid
 
+;==============================================================================
+; Mech_State00_Idle  [C]
+;   State 0x00, no job: encoder pulses (paper pulled by hand) are counted while
+;   idle; after 27 of them P5.3 is cleared.
+;==============================================================================
 Mech_State00_Idle:
-; [C] encoder pulse with no job: while idle, count EncoderIdleCount; on overflow (27 pulses) clear P5.3
         test (SysFlags).7   ; Idle
         jrs T,LABAD
         ld HL,EncoderIdleCount
@@ -181,8 +218,14 @@ Mech_State00_Idle:
 LABAD:
         reti
 
+;==============================================================================
+; Mech_State01_Column  [C]
+;   Print states 0x01-0x10, one per pixel column: each fills the strobe table
+;   for a later column from its block of ColumnCodes, through the 16
+;   Strobe<A|B>_RowNN routines. 16 states make one cycle (two tile columns);
+;   a band is 10 cycles (160 columns).
+;==============================================================================
 Mech_State01_Column:
-; [C] print states 01-10: one pixel column per state, 16 states per cycle, 10 cycles per band
         ld A,(BandIndex)
         shlc A
         ld W,$00
@@ -557,8 +600,15 @@ Mech_State0F_Column:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State10_Column  [C]
+;   State 0x10, last column of a cycle: advances LineCounter (the step in the
+;   band's tick curve). At the end of a band (LineCounter = 23) decides what
+;   follows: self-test -> bottom margin; low battery -> stop; image finished
+;   -> after-margin or stop; Break requested -> stop; otherwise next band
+;   (BandIndex + 1, state 0x13).
+;==============================================================================
 Mech_State10_Column:
-; [C] last column state of a cycle
         inc (LineCounter)
         cmp (LineCounter),$17
         jr CC,LAFA5
@@ -666,8 +716,15 @@ LB020:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State11_Homing  [C]
+;   State 0x11, power-on homing. Finds the cam sensor edge, runs 27 pulses,
+;   finds the edge again and stops 3 pulses after the sensor drops. Then motor
+;   off, PowerOnLock cleared (packets are answered again) and, if requested,
+;   the self-test print. Releasing the button during homing cancels the
+;   self-test.
+;==============================================================================
 Mech_State11_Homing:
-; [C] power-on homing: find the cam sensor twice, stop 3 pulses after; clears PowerOnLock
         cmp (SelfTest),$00
         jrs T,LB06D
         test (P2).0
@@ -752,8 +809,12 @@ LB0F4:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State12_BandStart  [C]
+;   State 0x12, band start: 13 encoder pulses before the first column of a
+;   band.
+;==============================================================================
 Mech_State12_BandStart:
-; [C] before each band (13 pulses in the emulator)
         inc (LineCounter)
         cmp (LineCounter),$0D
         jr CS,LB106
@@ -763,8 +824,12 @@ LB106:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State13_BandAdvance  [C]
+;   State 0x13, between bands: moves the paper to the next band, then back to
+;   state 0x12.
+;==============================================================================
 Mech_State13_BandAdvance:
-; [C] between bands (115 pulses in the emulator)
         inc (LineCounter)
         cmp (LineCounter),$8A
         jr CS,LB11A
@@ -775,8 +840,12 @@ LB11A:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State14_TopMargin  [C]
+;   State 0x14, margin before the image: MarginBeforeLeft units (cam
+;   revolutions), then the first band.
+;==============================================================================
 Mech_State14_TopMargin:
-; [C] margin before printing
         ld HL,MechSubState
         cmp (HL),$00
         jr F,LB13E
@@ -828,8 +897,12 @@ LB17A:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State15_BottomMargin  [C]
+;   State 0x15, margin after the image (MarginAfter units; 3 for the
+;   self-test), then the job ends.
+;==============================================================================
 Mech_State15_BottomMargin:
-; [C] margin after printing (also the self-test)
         ld HL,MechSubState
         cmp (HL),$00
         jrs F,LB196
@@ -921,8 +994,11 @@ LB225:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State16_FeedOnly  [C]
+;   State 0x16, paper feed for a print with 0 copies (FeedOnlyAmount units).
+;==============================================================================
 Mech_State16_FeedOnly:
-; [C] print with 0 copies
         ld HL,MechSubState
         cmp (HL),$00
         jr F,LB247
@@ -986,8 +1062,11 @@ LB29F:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State17_ButtonFeed  [C]
+;   State 0x17, paper feed while the front button is held.
+;==============================================================================
 Mech_State17_ButtonFeed:
-; [C] front button feed
         test (P2).0
         jr T,LB2CF
         test (P2).0
@@ -1057,8 +1136,12 @@ LB321:
         ldw (EIR),$FD10
         reti
 
+;==============================================================================
+; Mech_State18_Stop  [C]
+;   State 0x18, stop (low battery or Break): motor off, busy cleared, job
+;   ended.
+;==============================================================================
 Mech_State18_Stop:
-; [C] stop after low battery or Break
         ld HL,MechSubState
         cmp (HL),$00
         jrs F,LB33E
@@ -1092,8 +1175,11 @@ LB34C:
         jr Z,Mech_StateInvalid
         set (MechRequests).2   ; ReqPrint
 
+;==============================================================================
+; Mech_StateInvalid  [I]
+;   States 0x19-0x1E (never set): treated as an invalid state.
+;==============================================================================
 Mech_StateInvalid:
-; [I] states 0x19-0x1E
         di
         ldw (EIR),$FD10
         reti

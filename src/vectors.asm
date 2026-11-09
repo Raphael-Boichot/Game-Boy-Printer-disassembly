@@ -1,12 +1,18 @@
 ; Unused interrupt handlers, unused ROM, interrupt vectors
 
 
+;==============================================================================
+; Int_Unused_Reti  [C]
+;   Unused interrupt vectors: reti.
+;==============================================================================
 Int_Unused_Reti:
-; [C]
         reti
 
+;==============================================================================
+; Int_Unused_Retn  [C]
+;   Unused interrupt vectors (INTWDT, INTSW): retn.
+;==============================================================================
 Int_Unused_Retn:
-; [C]
         retn
 
 ; fill E071-FFDF: [C] unused, 0xFF

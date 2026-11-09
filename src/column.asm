@@ -1,8 +1,13 @@
 ; Column extraction, history, energy codes, strobe-table writers
 
 
+;==============================================================================
+; Line_CopyColumnSource  [C]
+;   Copies the 32 bytes of the tile column being printed (2 stacked tiles x 8
+;   rows x 2 bit planes) from the line buffer to ColumnSource.
+;   Called by: Job_SetHeatTime
+;==============================================================================
 Line_CopyColumnSource:
-; [C] copy the 32 bytes (2 stacked tiles x 16 rows x 2 planes) of the tile column being printed
         ld HL,ColumnSource
         ld (HL),(DE)
         inc HL
@@ -106,8 +111,14 @@ LBA4D:
         ld (LineBufRd),DE
         ret
 
+;==============================================================================
+; Line_ExtractColumn  [C]
+;   Takes pixel TileColumnX of each of the 16 rows from ColumnSource (low and
+;   high bit planes), giving 16 dot values 0-3 in ColumnPixels, then applies
+;   the palette (0 = no remapping).
+;   Called by: Line_FirstColumn
+;==============================================================================
 Line_ExtractColumn:
-; [C] pixel x = TileColumnX of each of the 16 rows -> ColumnPixels (0-3); ends with the palette remap
         ld HL,ColumnPixels
         ld DE,ColumnSource
         ld A,$07
@@ -251,8 +262,14 @@ LBB32:
 LBB38:
         ret
 
+;==============================================================================
+; Line_ColumnHistory  [C]
+;   For each row: RowHistory = previous dot << 4 | current dot, and
+;   ColumnHistCode = Tab_EnergyByHistory[RowHistory]: less energy for a dot
+;   that was already printed in the previous column.
+;   Called by: Line_FirstColumn
+;==============================================================================
 Line_ColumnHistory:
-; [C] RowHistory = previous dot << 4 | current dot; ColumnHistCode = Tab_EnergyByHistory[RowHistory]
         ld HL,Tab_EnergyByHistory
         ld A,(ColumnPixels)
         rold A,(RowHistory)
@@ -320,8 +337,15 @@ Line_ColumnHistory:
         ld ($A6),(HL+C)
         ret
 
+;==============================================================================
+; Line_ColumnEnergy  [C]
+;   For each row: energy code = HeatTime + Tab_HeatCorr<grey>[RowHeatInt]
+;   (correction by the element's modelled heat) + the history code, clamped to
+;   0-0x64, written to ColumnCodes. Tab_DotTicks turns a code into the dot's
+;   first tick and tick count.
+;   Called by: Line_FirstColumn
+;==============================================================================
 Line_ColumnEnergy:
-; [C] code = HeatTime + Tab_HeatCorr<grey>[RowHeatInt] + ColumnHistCode, clamped 0-0x64, into ColumnCodes
         ld A,(TileColumnX)
         swap A
         ld W,$00
@@ -749,8 +773,16 @@ Tab_HeatCorrPtrs:
 ; words BEB6-BEBD: [I] Tab_ColumnTabPtrs
         dw Tab_HeatCorr0, Tab_HeatCorr1, Tab_HeatCorr2, Tab_HeatCorr3
 
+;==============================================================================
+; StrobeA_Row00  [C]
+;   Strobe-table writers (32 routines, BEBE-CA3F): StrobeA_Row00-15 and
+;   StrobeB_Row00-15, one per head dot and table. Each reads the dot's energy
+;   code, looks up (first tick, tick count) in Tab_DotTicks, and jumps into a
+;   ladder of `set (HL+).bit` instructions that turns the dot's bit on for that
+;   many consecutive ticks of the 33-tick table.
+;   Called by: Line_FirstColumn, Mech_State02_Column, Mech_State04_Column, Mech_State06_Column, Mech_State08_Column, Mech_State0A_Column, Mech_State0C_Column, Mech_State0E_Column, Mech_State10_Column
+;==============================================================================
 StrobeA_Row00:
-; [C] set P0.0 (band row 0) in strobe table A for the dot's tick count
         ld A,(DE)
         shlc A
         inc DE

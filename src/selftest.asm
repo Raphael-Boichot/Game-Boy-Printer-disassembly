@@ -1,8 +1,14 @@
 ; SRAM test and self-test image
 
 
+;==============================================================================
+; Boot_SramTest  [C]
+;   Power-on SRAM test: writes an incrementing pattern to the 0x1680 image
+;   bytes and reads it back; a mismatch is other error (0x40). The pattern
+;   stays in memory.
+;   Called by: Reset
+;==============================================================================
 Boot_SramTest:
-; [C] write and read back 0x1680 SRAM bytes; failure = other error (0x40)
         ld BC,$0000
         ld D,$00
 LDD8A:
@@ -27,8 +33,13 @@ LDDAA:
         set (Status).1   ; StOtherError
         ret
 
+;==============================================================================
+; SelfTest_Load  [C]
+;   Self-test: copies the 640-byte band Gfx_SelfTestBand into SRAM in print
+;   order, as if one data packet had been received (ImageBytes = 0x280).
+;   Called by: Reset
+;==============================================================================
 SelfTest_Load:
-; [C] copy the self-test band to SRAM as one data packet
         ld HL,Gfx_SelfTestBand
         ld BC,$0000
         ld W,$00

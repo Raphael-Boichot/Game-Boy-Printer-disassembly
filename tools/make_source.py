@@ -76,9 +76,15 @@ def block_at(a):
     return None
 
 
+keep = {}
+for f in ('README.md',):                     # hand-written files in src/ survive a regeneration
+    if os.path.exists(os.path.join(SRC, f)):
+        keep[f] = open(os.path.join(SRC, f), 'rb').read()
 if os.path.isdir(SRC):
     shutil.rmtree(SRC)
 os.makedirs(os.path.join(SRC, 'data'))
+for f, data in keep.items():
+    open(os.path.join(SRC, f), 'wb').write(data)
 
 # ---------------------------------------------------------------- includes from the equ section
 hw, ram = [], []

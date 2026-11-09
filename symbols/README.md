@@ -10,6 +10,7 @@
 | `rom_names.csv` | addr, name, tag, note | routines, labels, jump-table states and data tables |
 | `rom_types.csv` | start, end, type, width, tag, note | data blocks: `words`, `bytes` (row width), `fill` |
 | `roots.csv` | addr, reason | extra code entry points for the tracer |
+| `comments.txt` | `@ ADDR` then text lines | comment block printed above each routine (what it does, inputs and outputs, when it runs); the build adds a `Called by:` line from the traced call sites |
 
 Tags: **C** = code-traced, or reproduced by running the firmware in `../emulator/`; **I** = inferred; **?** = doubt (name is a placeholder).
 

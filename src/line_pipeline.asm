@@ -1,8 +1,17 @@
 ; Line pipeline: first column, column preparation for strobe tables A / B, line buffer refill
 
 
+;==============================================================================
+; Line_FirstColumn  [C]
+;   Prepares the first pixel column of a job, the same chain as
+;   Line_NextColumnA/B written out once: copy the tile column
+;   (Line_CopyColumnSource), extract the 16 dots (Line_ExtractColumn),
+;   history codes (Line_ColumnHistory), energy codes (Line_ColumnEnergy), then
+;   for each row adds the dot's heat to RowHeat (Tab_HeatAddByCode,
+;   Tab_HeatAddFreshByTemp after a white dot, IdleCool for a white dot) and
+;   records the printed rows in DotMask.
+;==============================================================================
 Line_FirstColumn:
-; [C] job start: extract, history, energy codes and heat accumulation for the first column
         call Line_ExtractColumn
         call Line_ColumnHistory
         ld DE,ColumnCodes
@@ -737,8 +746,15 @@ L8D6F:
         set (MechFlags).3   ; MechActive
         set (Status).6   ; StBusy
 
+;==============================================================================
+; Main_LinePipeline  [C]
+;   Print pipeline, run every pass between strobe bursts: when the line buffer
+;   is empty, refill it from SRAM (Main_RefillLineBuf); otherwise, when the
+;   next column is due, prepare it into the strobe table that is not being
+;   fired (Line_NextColumnA or Line_NextColumnB). Continues with the data
+;   decoder (Data_Main).
+;==============================================================================
 Main_LinePipeline:
-; [C] between bursts: refill LineBuf from SRAM when empty, else copy the next tile column and prepare the next column
         ld WA,(LineBufWr)
         ld DE,(LineBufRd)
         cmp WA,DE
@@ -852,8 +868,13 @@ L8E17:
         ld (LineBufRd),DE
         clr (TileColumnX)
 
+;==============================================================================
+; Line_NextColumnA  [I]
+;   Prepares the next pixel column into strobe table A (StrobeA_P0/P1): the
+;   same chain as Line_FirstColumn, unrolled, then writes each row's tick
+;   window with the StrobeA_RowNN routines.
+;==============================================================================
 Line_NextColumnA:
-; [I] same chain as Line_FirstColumn, unrolled, for the next column (strobe tables A)
         ld HL,ColumnPixels
         ld DE,ColumnSource
         ld A,$07
@@ -2284,8 +2305,12 @@ L9824:
         ld (LineBufRd),DE
         clr (TileColumnX)
 
+;==============================================================================
+; Line_NextColumnB  [I]
+;   Prepares the next pixel column into strobe table B (StrobeB_P0/P1); same as
+;   Line_NextColumnA for the other buffer.
+;==============================================================================
 Line_NextColumnB:
-; [I] same chain for the strobe tables B
         ld HL,ColumnPixels
         ld DE,ColumnSource
         ld A,$07
@@ -3608,14 +3633,23 @@ LA18D:
 LA19B:
         set (MechFlags).1   ; LineFetch
 
+;==============================================================================
+; Line_TileColumnDone  [C]
+;   After the 8 pixel columns of a tile column: moves to the next tile column;
+;   after 20 tile columns the band is finished (Heat_BandStart).
+;==============================================================================
 Line_TileColumnDone:
-; [C] after 8 pixel columns: next tile column; after 20, a new band
         dec (TileColumnsLeft)
         jr Z,Heat_BandStart
         jp Main_RefillLineBuf
 
+;==============================================================================
+; Heat_BandStart  [C]
+;   New band: TileColumnsLeft = 20, clears RowHistory, and removes
+;   Tab_BandCoolByTemp[temperature] from every RowHeat accumulator (the head
+;   cools while the paper moves to the next band).
+;==============================================================================
 Heat_BandStart:
-; [C] new band: clear RowHistory, RowHeat -= Tab_BandCoolByTemp[temperature]
         ld (TileColumnsLeft),$14
         clr (RowHistory)
         clr ($A8)
@@ -3739,8 +3773,12 @@ LA296:
         ld ($D5),WA
         ldw (DotMask),$0000
 
+;==============================================================================
+; Main_RefillLineBuf  [C]
+;   Copies the next 32-byte chunks of the image from SRAM (PrintReadPos) into
+;   the line buffer (LineBuf, LineBufWr) until it is full or the image ends.
+;==============================================================================
 Main_RefillLineBuf:
-; [C] copy 32-byte chunks from SRAM into LineBuf while printing
         test (MechFlags).6   ; LineBufFill
         jr T,LA2E9
         ld WA,(PrintReadPos)

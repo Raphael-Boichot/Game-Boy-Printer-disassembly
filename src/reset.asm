@@ -1,8 +1,19 @@
 ; Reset: ports, RAM clear, SRAM test, timers, serial port, battery check, self-test request
 
 
+;==============================================================================
+; Reset  [C]
+;   Power-on entry. Disables interrupts, sets the stack to 0x043F, switches the
+;   watchdog off (WDTCR2 = 0xB1), sets the port directions and levels, clears
+;   RAM 0x0048-0x043F, and sets the power-on flags (PowerOnLock, ReqHoming).
+;   Then: SRAM test (Boot_SramTest), timers TC2 (10.24 ms tick) and TC4
+;   (inter-byte timeout), SIO2 in 8-bit transmit/receive mode with external
+;   clock, interrupt enables, a first battery reading, and the self-test check:
+;   front button held at power-on -> SelfTest = 1 and SelfTest_Load. Falls into
+;   Main_Loop. With a low battery at power-on the homing never runs, so the
+;   printer keeps answering 0xFF (PowerOnLock).
+;==============================================================================
 Reset:
-; [C] boot: stack, watchdog off, ports, RAM clear, SRAM test, timers, SIO2, battery check, self-test check
         di
         ld SP,$043F
         ld (SYSCR1),$00
@@ -64,8 +75,12 @@ L803B:
         ld (SelfTest),$01
         call SelfTest_Load
 
+;==============================================================================
+; Boot_SettleDelay  [C]
+;   Busy-wait (WA counts up to 0) so the supply settles before the first
+;   battery reading.
+;==============================================================================
 Boot_SettleDelay:
-; [C] 65,536-step busy-wait before the first battery reading
         ld WA,$0000
 L80AB:
         inc WA
