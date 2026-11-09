@@ -6,30 +6,28 @@ Evidence tags as in the [Game Boy Camera disassembly](https://github.com/Raphael
 
 This document derives the Game Boy Printer protocol from the printer's own firmware. It confirms the documented protocol and adds the edge cases an accurate emulator (for example a BGB print interceptor) needs. All addresses are CPU addresses in the ROM (0x8000–0xFFFF) unless they are below 0x1000, which are RAM or registers.
 
-Behaviours not described in the usual community documentation are marked **[new]**.
-
 ---
 
 ## 1. At a glance
 
 | Topic | Firmware behaviour | Where |
 |---|---|---|
-| Sync | `88 33`. A bad first byte puts the printer in "reply 0xFF" mode until the line goes quiet, and **posts an Init if the printer is idle** **[new]** | B38A, B3BF |
+| Sync | `88 33`. A bad first byte puts the printer in "reply 0xFF" mode until the line goes quiet, and **posts an Init if the printer is idle** | B38A, B3BF |
 | Header | command, compression flag, 16-bit little-endian length | B3E2–B4C2 |
 | Checksum | 16-bit sum of command, compression, both length bytes and every payload byte, sent little-endian | accumulator at 0x414 |
 | Reply | `0x81` then the status byte, in the two byte slots after the checksum | B691 |
-| Commands | 0x01 init, 0x02 print, 0x04 data, 0x08 break (stops printing) **[new detail]**, 0x0F status; any other value is acknowledged and ignored | B4DA–B77B |
+| Commands | 0x01 init, 0x02 print, 0x04 data, 0x08 break (stops printing), 0x0F status; any other value is acknowledged and ignored | B4DA–B77B |
 | Payload limit | length must be < 0x400 (1024) | B510, B76A |
 | Compression | flag must be 0 or 1. RLE: control byte < 0x80 → c+1 literal bytes; ≥ 0x80 → next byte repeated (c − 0x80) + 2 times | B576, A4DF |
 | Image memory | 9 slots × 640 bytes = 0x1680 bytes, in external SRAM | A36F |
 | Status bits | 0x01 checksum, 0x02 busy, 0x04 image data full (= end-of-data received), 0x08 unprocessed data, 0x10 packet error, 0x20 paper jam, 0x40 other error, 0x80 low battery | register 0x7C, stored bit-reversed |
-| Checksum flag lag **[new]** | the status byte is built **before** the checksum is compared, so bit 0x01 describes the **previous** packet | B62F vs B67C |
-| Print preconditions **[new]** | Print needs an empty data packet first and at least 4 argument bytes; otherwise packet error and nothing prints | B74F |
-| Palette 0x00 **[new]** | means "no remapping", identical to 0xE4 | 8EC8 |
-| Inter-byte timeout **[new]** | hardware timer TC4 restarted on every byte; if it expires mid-packet, the packet is aborted and its data rolled back | vector FFEA → B99E |
-| Idle reset **[new]** | 12–13 main-loop ticks (≈125–133 ms at 8 MHz) with no byte while not printing clear memory and status, as an Init would | 82DC |
-| Inter-byte limit **[new]** | 20 × 2048 / fc = 5.12 ms (8 MHz crystal) | TC4 |
-| Power-on lockout **[new]** | until the mechanism has finished its start-up sequence, every packet is answered 0xFF | B399 |
+| Checksum flag lag | the status byte is built **before** the checksum is compared, so bit 0x01 describes the **previous** packet | B62F vs B67C |
+| Print preconditions | Print needs an empty data packet first and at least 4 argument bytes; otherwise packet error and nothing prints | B74F |
+| Palette 0x00 | means "no remapping", identical to 0xE4 | 8EC8 |
+| Inter-byte timeout | hardware timer TC4 restarted on every byte; if it expires mid-packet, the packet is aborted and its data rolled back | vector FFEA → B99E |
+| Idle reset | 12–13 main-loop ticks (≈125–133 ms at 8 MHz) with no byte while not printing clear memory and status, as an Init would | 82DC |
+| Inter-byte limit | 20 × 2048 / fc = 5.12 ms (8 MHz crystal) | TC4 |
+| Power-on lockout | until the mechanism has finished its start-up sequence, every packet is answered 0xFF | B399 |
 
 ---
 
@@ -200,7 +198,7 @@ The serial interrupt only fills the 32-byte ring buffer. The main loop (A2ED–A
 - **Compressed packets** use the RLE scheme below, which matches the community documentation:
   - control byte `c` < 0x80 → copy the next `c + 1` bytes;
   - control byte `c` ≥ 0x80 → repeat the next byte `c − 0x7E` times (= (c & 0x7F) + 2).
-- **Compression quirks [new]:**
+- **Compression quirks:**
   - The run state is reset whenever a slot fills, so a run that crosses a 640-byte boundary is cut short.
   - At the end of a compressed packet, the rest of the current slot is padded with 0x00 up to 640 bytes, so every compressed packet occupies whole slots.
   - The compression flag is sampled per packet.
@@ -211,7 +209,7 @@ The serial interrupt only fills the 32-byte ring buffer. The main loop (A2ED–A
 - **"Unprocessed data" (0x08)** is set when a packet's data has been fully committed, which happens after its reply.
 - **No overflow check on the ring buffer.** The decoder must keep up with the link, which it does at Game Boy speeds.
 - **Printing** reads SRAM from 0x83 up to 0x85 in 32-byte chunks into the line buffer at 0x0100–0x023F.
-- **Only whole bands print cleanly [new].** Printing always runs in whole 16-row bands, rounding the stored length up. The image memory is never cleared (Init and the idle reset only reset pointers), so the rest of a partial last band is whatever the memory already held. Examples:
+- **Only whole bands print cleanly.** Printing always runs in whole 16-row bands, rounding the stored length up. The image memory is never cleared (Init and the idle reset only reset pointers), so the rest of a partial last band is whatever the memory already held. Examples:
   - after a job of `0x11` / `0x22` packets, a 700-byte packet of `0xFF` prints a second band made of 60 new bytes and 580 bytes of `0x22` from the previous job;
   - right after power-on the leftover is the SRAM test pattern (00, 01 … FF repeating), which prints as stripes.
 
@@ -273,7 +271,7 @@ How the head is driven (from the code, reproduced in the emulator, timing checke
   | Light grey | 0.86–0.95 ms | 0.96 ms |
 
   With a reading of 0x80 the emulator gives 1.81 / 1.38 / 1.03 ms.
-- **Heat compensation [new]:** the on-time is not constant. The first burst of a job is about twice as long (2.99 ms for black). The on-time then steps down every 16 bursts as the head warms (1.85, 1.84, 1.80, 1.76 … ms), rises slightly towards the end, and the last line is the shortest (1.46 ms for black). The step comes from the table read at AB45, indexed by the line counter 0x72.
+- **Heat compensation:** the on-time is not constant. The first burst of a job is about twice as long (2.99 ms for black). The on-time then steps down every 16 bursts as the head warms (1.85, 1.84, 1.80, 1.76 … ms), rises slightly towards the end, and the last line is the shortest (1.46 ms for black). The step comes from the table read at AB45, indexed by the line counter 0x72.
 - White dots get only very short pulses (0.02–0.15 ms).
 ### Head energy model (L6)
 
@@ -313,7 +311,7 @@ The tick length itself (`TREG1A`, µs) = `Tab_TickCurves*[BandIndex][step]` − 
 
 **Sync loss (bad first byte).** If the first byte of a packet is not 0x88, or flag `DA.4` is set, the receiver (B3BF):
 
-1. posts an **Init request if the printer is not printing** **[new]**, so line noise while idle wipes the buffer;
+1. posts an **Init request if the printer is not printing**, so line noise while idle wipes the buffer;
 2. replies **0xFF** to that byte and to every following byte;
 3. if printing, sets `DA.4`, so every later packet until the job ends is also treated as garbage;
 4. stays in this loop until the TC4 inter-byte timeout fires (a gap on the line).
@@ -333,7 +331,7 @@ The tick length itself (`TREG1A`, µs) = `Tab_TickCurves*[BandIndex][step]` − 
 
 This is effectively an Init: `Cmd_Init` (857B) clears exactly the same state. So a sender must not pause too long between the last data packet and Print. After a job ends, the status also falls back to 0x00 by itself.
 
-**Init has no shelf life [new].** Init only clears state; it sets no "initialised" flag that a later packet checks. What expires is the job loaded after it, through the idle reset above. In the emulator:
+**Init has no shelf life.** Init only clears state; it sets no "initialised" flag that a later packet checks. What expires is the job loaded after it, through the idle reset above. In the emulator:
 - data sent 100 ms, 500 ms or 10 s after Init is accepted and prints;
 - a job with no Init at all also prints;
 - data, empty data packet, then a 100 ms pause before Print: prints;
@@ -347,7 +345,7 @@ Every received byte reloads the timer, so a Game Boy that keeps polling with sta
 
 **Paper jam.** During printing or feeding, a timer (0xF3/0xF4) counts down while waiting for the mechanism; on expiry the motor stops, the jam abort described in section 6 happens, and the state machine returns to 0.
 
-**Head temperature / battery.** Checked at boot (battery), before each job (both) and periodically (A409). Out-of-range temperature → 0x40 (sticky). Low battery during operation → 0x80 (sticky) and the print is aborted: the emulator shows 0x06 → 0x86 → 0x84. **At power-on [new]**, a low battery or an out-of-range head temperature stops the start-up homing from running, so the power-on lockout is never lifted: the printer then answers **0xFF** to every packet and never reports 0x80 or 0x40 (a paper-jam flag is the only error that bypasses the lockout, B396).
+**Head temperature / battery.** Checked at boot (battery), before each job (both) and periodically (A409). Out-of-range temperature → 0x40 (sticky). Low battery during operation → 0x80 (sticky) and the print is aborted: the emulator shows 0x06 → 0x86 → 0x84. **At power-on**, a low battery or an out-of-range head temperature stops the start-up homing from running, so the power-on lockout is never lifted: the printer then answers **0xFF** to every packet and never reports 0x80 or 0x40 (a paper-jam flag is the only error that bypasses the lockout, B396).
 
 ---
 
