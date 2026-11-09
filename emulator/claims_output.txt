@@ -13,7 +13,7 @@ next packet after a >5.12 ms gap                           expected 81 00       
 job loaded, then 88 00 and a gap, then Print               expected 10             observed 10             MATCH (the bad second byte posted an Init)
 longest gap inside a packet that is still accepted         expected 3.91-3.93 ms   observed 3.91-3.93 ms   MATCH (+1.2 ms byte time = 5.12 ms)
 silence after end-of-data that wipes the job               expected 125-126 ms     observed 125-126 ms     MATCH (12-13 ticks of 10.24 ms)
-two jobs, no Init, no pause: motor pulses, bytes printed   expected 480/1280 480/1280 observed 480/1280 480/1280 MATCH (the second job starts a new image by itself)
+two jobs, no Init, no pause: motor pulses, bytes printed   expected 500/1280 500/1280 observed 500/1280 500/1280 MATCH (the second job starts a new image by itself)
 data without Print, then a job at once: bytes printed      expected 2560           observed 2560           MATCH (old data printed first)
 end-of-data without Print, then data at once               expected 18             observed 18             MATCH (packet error; after > 130 ms of silence: accepted)
 init while printing: status, init reply, status            expected 06 0E 0E       observed 06 0E 0E       MATCH (init ignored, 0x08 set)

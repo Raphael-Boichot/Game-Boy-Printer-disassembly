@@ -350,7 +350,7 @@ Every received byte reloads the timer, so a Game Boy that keeps polling with sta
 
 | | Cold boot idle | Print-finished idle |
 |---|---|---|
-| Starts | after the start-up homing, about 1.2 s after power-on (before that every packet is answered 0xFF) | when the last copy and its bottom margin are done |
+| Starts | after the start-up homing, about 2.5 s after power-on in the emulator (before that every packet is answered 0xFF) | when the last copy and its bottom margin are done |
 | Status | 0x00 | 0x04 ("image data full" stays set) |
 | Flag `AfterPrint` (0xE1 bit 0) | clear | set: the next data packet starts a new image by itself |
 | Image memory | SRAM test pattern, pointers at 0 | the last image, pointers still on it |
@@ -387,7 +387,7 @@ Games send Init anyway, to start from a known state and to detect the printer. A
 
 ## 10. Built-in self-test
 
-- **Trigger:** at power-on the boot code (809C) reads P2.0 twice; if it is low both times (front button held), it sets 0xF5 = 1 and calls DDAD. The start-up homing (state 0x11, B05F) clears 0xF5 at any encoder pulse where the button is released, so the button must be held **until the motor stops** (about 1.2 s after power-on in the emulator); releasing it earlier cancels the test.
+- **Trigger:** at power-on the boot code (809C) reads P2.0 twice; if it is low both times (front button held), it sets 0xF5 = 1 and calls DDAD. The start-up homing (state 0x11, B05F) clears 0xF5 at any encoder pulse where the button is released, so the button must be held **until the motor stops** (about 2.5 s after power-on in the emulator); releasing it earlier cancels the test.
 - **Image:** DDAD copies the **640-byte image at 0xDDEE–0xE06D** (standard Game Boy 2bpp tiles, 20 × 2 tiles = 160 × 16 px) into SRAM, as if one data packet had been received (0x85 = 0x280). The test print uses an after-margin of 3 (AFB7, state 0x15).
 - **Content:** a speckled border, a Mario head, a "Hello!" banner and a Game Boy (`printer_test_image.png`).
 - **Memory test:** just before this, routine DD85 writes an incrementing pattern over all 0x1680 SRAM bytes and reads it back. Any mismatch sets "other error" (0x40).
@@ -441,11 +441,11 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 
 - the low-battery reporting delay (`D9.1`);
 - the effect of P5.3 (cutting the head supply), from the schematic;
-- the cam-sensor period in the emulator (a guess, `emulator/README.md`), so the length of a margin unit is not known. The encoder rate is measured: 4 ms per pixel column (Furrtek's scope measurements).
+- the cam-sensor duty cycle in the emulator (a guess, `emulator/README.md`). The encoder rate is measured (4 ms per pixel column, Furrtek's scope measurements) and so is the cam revolution (about 1 s, one margin unit, the owner's timing of a real printer).
 
 **?** (not resolved):
 
-- The length of one revolution of the cam sensor (P5.1 / INT4) in paper feed. Margins are counted in cam revolutions, so timing a margin-1 feed on a real printer would settle it.
+- The exact number of encoder pulses per cam revolution and how long the cam sensor stays active. The emulator uses 250 pulses (1 s at 4 ms per pulse, from the owner's timing) with the sensor active for 8 of them.
 
 The signals themselves are confirmed by the schematic: INT3 = encoder from CN1 pin 3, INT4 = cam sensor on CN1 pin 5, P5.2 = motor drive.
 
@@ -500,12 +500,14 @@ Key routines for anyone continuing: `Int_SIO2_Receiver` (B373) · `Rx_WaitByte` 
 | Encoder stops during a print: status, Init, status | 28 28 28 (jam + unprocessed, sticky) |
 | Front button held until the homing ends | self-test band printed (status 02 then 00); released earlier: no self-test |
 | Copies | 2 sheets take exactly twice the motor pulses of 1 |
-| Margins | each margin unit (either nibble) = one cam revolution of paper feed |
+| Margins | each margin unit (either nibble) = one cam revolution of paper feed, about 1 s |
+| Band length | 288 encoder pulses (13 band start + 160 columns + 115 paper advance), about 1.15 s; not tied to the cam |
+| End of a job | the motor runs on to the cam's home position, so a job lasts a whole number of cam revolutions |
 | Strobe timing, exposure 0x40 | 160 bursts per band, 4.00 ms apart; on-time black 1.55, dark 1.20, light 0.86–0.95 ms in mid-picture (real printer: 1.56 / 1.20 / 0.96 ms); first line about 2× longer (section 8) |
 
 The power-on sequence in the emulator:
 1. RAM and SRAM test.
-2. Homing at about 0.5 s: the motor runs until the cam sensor has been seen twice, about 0.7 s.
-3. Idle at about 1.2 s.
+2. Homing at about 0.47 s: the motor runs until the cam sensor has been seen twice, about 2 s (497 pulses) with a 1 s cam revolution.
+3. Idle at about 2.5 s.
 
 Packets sent before step 3 are answered 0xFF.

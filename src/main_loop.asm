@@ -630,7 +630,9 @@ L8525:
 ;==============================================================================
 ; Main_CamWatchdog  [C]
 ;   Cam-sensor watchdog while the motor runs: the cam sensor (P5.1) must change
-;   level within 13 ticks while high and 51 ticks while low (CamTimeout).
+;   level within 13 steps while high and 51 steps while low (CamTimeout); a step
+;   is 8 encoder pulses (INT3 sets CamChange every 8th pulse), so at most 104
+;   pulses high and 408 pulses low.
 ;   Otherwise: paper jam (status 0x20), motor stopped, job aborted.
 ;==============================================================================
 Main_CamWatchdog:

@@ -10,7 +10,7 @@ import copy, sys
 from gbprinter_emu import Printer, Link
 
 rom = open(sys.argv[1] if len(sys.argv) > 1 else '../TMP87C840_Toshiba_printer_ROM.bin', 'rb').read()
-BOOT = Printer(rom); BOOT.run_ms(1500)
+BOOT = Printer(rom); BOOT.run_ms(3000)
 
 
 def tile(c):

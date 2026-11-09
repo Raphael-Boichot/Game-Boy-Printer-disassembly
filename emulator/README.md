@@ -5,7 +5,7 @@
 ```python
 from gbprinter_emu import Printer, Link, status_str
 p = Printer(open('../TMP87C840_Toshiba_printer_ROM.bin', 'rb').read())
-p.run_ms(1500)                      # power-on: RAM/SRAM test and the mechanism homing
+p.run_ms(3000)                      # power-on: RAM/SRAM test and the mechanism homing
 L = Link(p)                         # 1.2 ms per byte, like a Game Boy at 8 kHz with a short gap
 rx = L.packet(0x01)                 # Init; returns every byte the Game Boy reads
 print(status_str(rx[-1]))           # 00[]
@@ -28,13 +28,13 @@ print(status_str(rx[-1]))           # 00[]
 | ADC | instant; channel 0 = head temperature (default 0x80), channel 1 = battery (default 0xC0) | firmware use |
 | Image SRAM | 8 KB on P3 (address low), P4 & 0x1F (address high), P7 (data); write on P2.1 rising edge with P2.2 low, read with P2.2 and P5.4 low | firmware routines A48F / A4A4 |
 | Paper motor | P5.2 low = motor on; while on, an encoder pulse on INT3 every `enc_period_ms` (default 4 ms: one strobe burst, as measured on a real printer by Furrtek) | firmware: INT3 handler AAED, jam watchdog 8360; Furrtek's scope measurements |
-| Cam / home sensor | P5.1 (INT4 on its rising edge) high for `cam_high` (8) out of every `cam_period` (40) encoder pulses | firmware: homing state 0x11 (B05F), watchdog 8532 |
+| Cam / home sensor | P5.1 (INT4 on its rising edge) high for `cam_high` (8) out of every `cam_period` (250) encoder pulses | firmware: homing state 0x11 (B05F), watchdog 8532; one revolution takes about 1 s on a real printer (the owner's timing) |
 | Front button | P2.0, `button=True` holds it | boot 809C |
 | IDLE mode | SYSCR2 bit 4: the CPU waits for the next interrupt | datasheet |
 
 ## Assumptions that matter
 
-* `enc_period_ms` = 4 ms matches the real printer: the emulated strobe widths at exposure 0x40 (`strobe_check.py`, output in `strobe_output.txt`) agree with Furrtek's scope measurements on a real printer (black 1.55 vs 1.56 ms, dark 1.20 vs 1.20 ms, light 0.86–0.95 vs 0.96 ms) with a head-temperature reading of 0x60 or less. `cam_period` and `cam_high` are guesses. The firmware needs them to be roughly right (the homing needs the cam sensor active for at least ~6 pulses; the watchdogs allow at most 12 ticks between encoder pulses, 13 ticks with the sensor active and 51 ticks with it inactive), but their real values are not known. Print durations, the number of pulses per band and the length of a margin unit (one cam revolution) therefore come from the model, not from the printer.
+* `enc_period_ms` = 4 ms matches the real printer: the emulated strobe widths at exposure 0x40 (`strobe_check.py`, output in `strobe_output.txt`) agree with Furrtek's scope measurements on a real printer (black 1.55 vs 1.56 ms, dark 1.20 vs 1.20 ms, light 0.86–0.95 vs 0.96 ms) with a head-temperature reading of 0x60 or less. `cam_period` = 250 comes from the owner's timing of a real printer (one cam revolution, one margin unit, takes about 1 s; 250 pulses at 4 ms); the exact pulse count is not known. `cam_high` = 8 is a guess. The firmware needs both to be roughly right: the homing needs the cam sensor active for at least ~6 pulses, and the jam watchdogs allow at most 12 ticks between encoder pulses and, counted in steps of 8 encoder pulses, at most 13 steps (104 pulses) with the cam sensor active and 51 steps (408 pulses) with it inactive. A band is a fixed 288 pulses whatever the cam does; the cam sets the length of a margin unit and where the motor stops at the end of a job.
 * The strobe lines (P0/P1) are logged, but how they map to dots on the head is not modelled, so the emulator does not draw the printed picture.
 * Cycle counts are approximate. Protocol timing does not depend on them: the timeouts come from the timers, which are exact.
 * The emulator runs only this ROM; unused peripherals (SIO1, TBT, watchdog) are ignored.

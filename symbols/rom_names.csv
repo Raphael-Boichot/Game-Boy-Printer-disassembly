@@ -11,7 +11,7 @@ addr,name,tag,note
 8379,Main_StartDelay,C,"counts StartDelay (12 ticks, about 123 ms) before a job or the next copy starts"
 83AF,Heat_DecayTick,C,per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
 8505,Main_LowBattery,C,"after low battery: once reported (and LowBatTimer expired) or held while idle, clear P5.3"
-8529,Main_CamWatchdog,C,jam if the cam sensor does not change within 13 ticks (high) / 51 ticks (low)
+8529,Main_CamWatchdog,C,jam if the cam sensor does not change within 13 steps (high) / 51 steps (low) of 8 encoder pulses
 8564,Main_Commands,C,run the commands posted by the receiver (CmdRequests)
 857B,Cmd_Init,C,"clear image memory, decoder, image-full, unprocessed (unless jammed), break block"
 85AB,Cmd_Print,C,"take the 4 print arguments: copies, margins, palette, exposure"

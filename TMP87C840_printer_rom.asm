@@ -146,7 +146,7 @@ SavedSlotOffset  equ $00EE   ; [C] 2 byte(s). rollback copy of SlotOffset
 RxSavedEIR       equ $00F0   ; [C] 2 byte(s). EIR saved by the receiver
 SioIdleTimer     equ $00F2   ; [C] 1 byte(s). ticks without serial activity before SIO2 is re-armed (JobFlags.SioRearm)
 EncoderTimeout   equ $00F3   ; [C] 1 byte(s). ticks without an encoder pulse (jam at overflow)
-CamTimeout       equ $00F4   ; [C] 1 byte(s). ticks without a cam sensor change (jam at overflow)
+CamTimeout       equ $00F4   ; [C] 1 byte(s). steps of 8 encoder pulses without a cam sensor change (jam at overflow)
 SelfTest         equ $00F5   ; [C] 1 byte(s). 1 = self-test requested at power-on
 StartDelay       equ $00F6   ; [C] 1 byte(s). delay before a job or the next copy: 0xF4 -> 0 (12 ticks)
 IdleDelay        equ $00F7   ; [I] 1 byte(s). tick counter before idle mode
@@ -918,7 +918,9 @@ L8525:
 ;==============================================================================
 ; Main_CamWatchdog  [C]
 ;   Cam-sensor watchdog while the motor runs: the cam sensor (P5.1) must change
-;   level within 13 ticks while high and 51 ticks while low (CamTimeout).
+;   level within 13 steps while high and 51 steps while low (CamTimeout); a step
+;   is 8 encoder pulses (INT3 sets CamChange every 8th pulse), so at most 104
+;   pulses high and 408 pulses low.
 ;   Otherwise: paper jam (status 0x20), motor stopped, job aborted.
 ;==============================================================================
 Main_CamWatchdog:

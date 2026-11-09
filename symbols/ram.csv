@@ -44,7 +44,7 @@ addr,size,name,tag,desc
 00F0,2,RxSavedEIR,C,EIR saved by the receiver
 00F2,1,SioIdleTimer,C,ticks without serial activity before SIO2 is re-armed (JobFlags.SioRearm)
 00F3,1,EncoderTimeout,C,ticks without an encoder pulse (jam at overflow)
-00F4,1,CamTimeout,C,ticks without a cam sensor change (jam at overflow)
+00F4,1,CamTimeout,C,steps of 8 encoder pulses without a cam sensor change (jam at overflow)
 00F5,1,SelfTest,C,1 = self-test requested at power-on
 00F6,1,StartDelay,C,delay before a job or the next copy: 0xF4 -> 0 (12 ticks)
 00F7,1,IdleDelay,I,tick counter before idle mode

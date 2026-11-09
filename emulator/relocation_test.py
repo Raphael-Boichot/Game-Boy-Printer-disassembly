@@ -28,7 +28,7 @@ random.seed(1); IMG = [bytes(random.randrange(256) for _ in range(640)) for _ in
 
 
 def session(rom):
-    p = Printer(rom); p.run_ms(1500); L = Link(p)
+    p = Printer(rom); p.run_ms(3000); L = Link(p)
     r = [L.packet(1)[-1]] + [L.packet(4, IMG[i])[-1] for i in range(3)] + [L.packet(4)[-1], L.packet(2, bytes([1, 0x13, 0xE4, 0x40]))[-1]]
     seq, cnt, o = [], [0], p.sfr_wr
 

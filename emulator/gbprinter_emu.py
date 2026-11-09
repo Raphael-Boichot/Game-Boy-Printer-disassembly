@@ -57,7 +57,7 @@ class Printer:
         self.enc_pulses = 0
         self.motor_log = []               # (cycle, on/off)
         self.jam = False                  # True = encoder pulses stop even with the motor on
-        self.cam_period = 40              # encoder pulses per revolution of the cam/home sensor (P5.1, INT4)
+        self.cam_period = 250             # encoder pulses per revolution of the cam/home sensor (P5.1, INT4): about 1 s on a real printer (owner)
         self.cam_high = 8                 # pulses per revolution with the sensor active (P5.1 = 1)
         self.cam_pos = 7
         self.adc_ch = 0

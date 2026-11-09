@@ -4,7 +4,7 @@ import copy, random, sys
 from gbprinter_emu import *
 
 rom = open(sys.argv[1] if len(sys.argv) > 1 else '../TMP87C840_Toshiba_printer_ROM.bin', 'rb').read()
-BOOT = Printer(rom); BOOT.run_ms(1500)
+BOOT = Printer(rom); BOOT.run_ms(3000)
 random.seed(1)
 IMG = [bytes(random.randrange(256) for _ in range(640)) for _ in range(10)]
 RESULTS = []
@@ -165,11 +165,11 @@ a = L.packet(0x02, bytes([0, 0x03, 0xE4, 0x40])); p.run_ms(100); b = L.packet(0x
 record('print with 0 sheets, margin 3: status after 100ms', '06', seq(b), '(feed runs, busy)')
 
 # 19 low battery
-p = Printer(rom, batt_adc=0x70); p.run_ms(1500); L = Link(p)
+p = Printer(rom, batt_adc=0x70); p.run_ms(3000); L = Link(p)
 a = L.packet(0x0F); b = L.packet(0x0F)
 record('battery ADC 0x70 at power-on: two status replies', 'FF FF', seq(a, b), '(lockout never lifted)')
 # 20 head temperature out of range
-p = Printer(rom, temp_adc=0x20); p.run_ms(1500); L = Link(p); load(L); L.packet(0x04)
+p = Printer(rom, temp_adc=0x20); p.run_ms(3000); L = Link(p); load(L); L.packet(0x04)
 a = L.packet(0x02, bytes([1, 0x13, 0xE4, 0x40])); p.run_ms(100); b = L.packet(0x0F)
 record('head temp ADC 0x20 at power-on: status', 'FF', seq(b), '(lockout never lifted)')
 # 21 paper jam
