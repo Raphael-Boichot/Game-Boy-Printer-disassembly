@@ -12,9 +12,9 @@ This document derives the Game Boy Printer protocol from the printer's own firmw
 
 | Topic | Firmware behaviour | Where |
 |---|---|---|
-| Sync | `88 33`. A bad first byte puts the printer in "reply 0xFF" mode until the line goes quiet, and **posts an Init if the printer is idle** | B38A, B3BF |
-| Header | command, compression flag, 16-bit little-endian length | B3E2–B4C2 |
-| Checksum | 16-bit sum of command, compression, both length bytes and every payload byte, sent little-endian | accumulator at 0x414 |
+| Sync | two separate bytes, 0x88 then 0x33, each tested on its own (not a 16-bit word). A bad first byte puts the printer in "reply 0xFF" mode until the line goes quiet, and **posts an Init if the printer is idle** | B38A, B3BF |
+| Header | command, compression flag, length as two bytes, **low byte first** (640 = `80 02`) | B3E2–B4C2 |
+| Checksum | sum of command, compression, both length bytes and every payload byte, kept modulo 0x10000; sent as two bytes, **low byte first** | accumulator at 0x414 |
 | Reply | `0x81` then the status byte, in the two byte slots after the checksum | B691 |
 | Commands | 0x01 init, 0x02 print, 0x04 data, 0x08 break (stops printing), 0x0F status; any other value is acknowledged and ignored | B4DA–B77B |
 | Payload limit | length must be < 0x400 (1024) | B510, B76A |
@@ -117,9 +117,16 @@ The printer is the clocked side (the Game Boy drives the clock), and its serial 
 | 8+n | 0x00 | **0x81** | "printer present" |
 | 9+n | 0x00 | **status** | the 0x7C value from before the checksum compare (masks in section 6) |
 
+Byte order:
+
+- The link carries only single bytes; nothing is sent as a 16-bit unit. Every value wider than 8 bits (the length and the checksum) is sent as two bytes, **low byte first**, high byte second.
+- Length: byte 4 goes to 0x3EE, byte 5 to 0x3EF, and the receiver reads them back as one word (`ld WA,(DE)` at B4D0). The TLCS-870 keeps the low byte at the lower address (the reset vector at 0xFFFE is stored `00 80` for 0x8000), so byte 4 is the low byte. A 640-byte packet has `80 02` in bytes 4–5.
+- Checksum: the low byte (byte 6+n) is loaded as `00:byte` and subtracted from the running sum (B612–B61C); the high byte (byte 7+n) is loaded as `byte:00` and subtracted (B670–B67A); the packet is good when the result is 0.
+
 Checksum rules:
 
-- 16-bit sum of bytes 2…5+n, compared against the little-endian value in bytes 6+n and 7+n.
+- Sum of bytes 2…5+n (command, compression, length low, length high, payload), each added as an unsigned byte to a 16-bit accumulator that wraps at 0x10000, compared against the value in bytes 6+n (low) and 7+n (high).
+- The sync bytes are not summed.
 - The checksum covers the header and payload even when the payload is discarded (busy, oversized, unknown command).
 - On a mismatch, `7C.7` (status 0x01) is set **after** the reply is prepared, so the Game Boy sees it in the **next** reply.
 - A bad checksum on any command other than 0x02 or 0x08 also clears "image data full" (0x04).
@@ -367,7 +374,7 @@ Essential:
 
 1. Answer 0x00 to every byte except the two reply slots: `0x81`, then status.
 2. Sync on `88 33`. On a bad first byte, answer 0xFF until a gap in the traffic; if idle, also reset (Init).
-3. Accumulate the 16-bit checksum over command, compression, length and payload.
+3. Accumulate the checksum (modulo 0x10000) over command, compression, both length bytes and payload; read the length and the checksum low byte first.
 4. Data: accept only between Init (or a finished print) and the empty data packet; keep at most 9 × 640 bytes.
 5. RLE-decode compressed packets; pad each compressed packet to a whole 640-byte slot; don't pad uncompressed packets.
 6. Print: require the empty data packet and 4 argument bytes. Apply the palette (0x00 = 0xE4), margins (high nibble before, low nibble after) and the copy count (0 = feed only).
