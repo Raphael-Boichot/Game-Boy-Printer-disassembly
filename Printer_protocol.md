@@ -318,7 +318,7 @@ The tick length itself (`TREG1A`, µs) = `Tab_TickCurves*[BandIndex][step]` − 
 
 **Sync loss (bad sync byte).** If the first byte of a packet is not 0x88, the second is not 0x33, or flag `DA.4` is set, the receiver (B3BF):
 
-1. posts an **Init request if the printer is not printing**, so line noise while idle wipes the buffer;
+1. posts an **Init request if the printer is not printing** ("not printing" is defined below), so line noise while idle wipes the buffer. The main loop runs it at once (`Main_Commands`, 8564), even during a paper feed (code-read, not run in the emulator);
 2. replies **0xFF** to every following byte (the bad byte itself was already answered 0x00, since a reply is loaded one byte ahead);
 3. if printing, sets `DA.4`, so every later packet until the job ends is also treated as garbage;
 4. stays in this loop until the TC4 inter-byte timeout fires (a gap on the line).
@@ -345,6 +345,35 @@ This is effectively an Init: `Cmd_Init` (857B) clears exactly the same state. So
 - the same with a 140 ms pause: the Print reply is 0x10 (the end-of-data packet was wiped) and nothing prints.
 
 Every received byte reloads the timer, so a Game Boy that keeps polling with status packets (0x0F) keeps a loaded job alive indefinitely.
+
+**"Not printing" and the two idle states.** The receiver's test for "not printing" (sync loss B3BF, Init B4E3, Print B749) is the flag `JobFlags.Printing` (0xE1 bit 1). `Job_StartPrint` sets it (8739) once the temperature check has passed, about 26 ms after the Print command; it is cleared (862F) when the mechanism is back at rest and no copies are left, so it covers the margins and every copy. A feed-only job (0 copies) and the front-button feed set `Feeding` instead, so for these tests they count as "not printing" although the printer is busy. Seen from the link there are two idle states:
+
+| | Cold boot idle | Print-finished idle |
+|---|---|---|
+| Starts | after the start-up homing, about 1.2 s after power-on (before that every packet is answered 0xFF) | when the last copy and its bottom margin are done |
+| Status | 0x00 | 0x04 ("image data full" stays set) |
+| Flag `AfterPrint` (0xE1 bit 0) | clear | set: the next data packet starts a new image by itself |
+| Image memory | SRAM test pattern, pointers at 0 | the last image, pointers still on it |
+| Head heat model (`RowHeat`, `HeatSoak`) | cold | warm: the next job starts with slightly shorter strobes (section 8; code-read); it decays with time |
+
+Init, a bad sync byte and the silence reset clear the same pointers and flags (`Cmd_Init`, 857B; idle reset, 82E8), so after any of them the two states look the same from the link. None of them clears the image memory contents or the heat model.
+
+**Is Init needed?** No, for a sender that starts from a clean state. Init only resets pointers and flags, and two other mechanisms do the same:
+- after a finished print, the next data packet starts a new image by itself (`AfterPrint`);
+- after 125–133 ms of silence, the idle reset clears the same state as Init.
+
+Init (or a pause of more than about 130 ms) is needed only when a new job follows one that did not finish cleanly. All cases run in the emulator:
+
+| Before the new job | Without Init, no pause | Fix |
+|---|---|---|
+| power-on, or a pause > 130 ms | the job prints | none needed |
+| a finished print (status polls in between) | the job prints, a new image | none needed |
+| data sent, no Print | the new data is appended: the old image prints first (2 + 2 bands of data → 4 bands printed), and memory can fill (9 bands) | Init or a pause |
+| data and the empty data packet, no Print | the next data packet is refused: reply 0x18 (packet error, the end-of-data was already received) | Init or a pause |
+| a Break | data packets are refused (0x14) until the next Init | Init or a pause |
+| a print that ended with "unprocessed data" set (only after a paper jam) | the data packet is dropped with 0xFF replies (B548) | none: a jam lasts until power-off |
+
+Games send Init anyway, to start from a known state and to detect the printer. Any packet detects it, since every reply starts with `0x81`; a status packet (0x0F) is the usual choice. An emulator must still accept Init.
 
 **Idle and serial watchdog.** The printer enters IDLE mode (1 s tick) 133 ms after the last byte when nothing is pending, and the front button or a serial byte wakes it (emulator). If no packet is in progress and the serial port has been quiet for about 123 ms, the firmware re-arms SIO2 in 1-byte mode (`Main_Tick`, `JobFlags.SioRearm`). The firmware has no timed power-off: nothing changes in 4 minutes of idle in the emulator.
 
@@ -381,6 +410,8 @@ Essential:
 7. Status bits and their lifecycle from section 6, including 0x08 after data, 0x04 after the empty packet, 0x06 while "printing", 0x04 after.
 8. Keep busy (0x02) set for a realistic time. The Game Boy Camera and other games poll status until busy clears, and some games time out if the printer is too fast or too slow.
 
+Init is optional for a sender that starts clean or pauses more than about 130 ms between jobs (section 9, "Is Init needed?"); an emulator must still accept it.
+
 For hardware-level accuracy:
 
 - Report the checksum-error bit one packet late.
@@ -404,7 +435,7 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 - palette remap and palette-0 special case;
 - self-test image and trigger;
 - confirmed on a real printer by the owner: only multiples of 640 bytes print correctly; other lengths print leftovers from memory (section 7);
-- reproduced in the emulator: the status sequence (section 6), the one-packet checksum lag, Init-on-garbage while idle, 0xFF sync-loss mode, Init while busy setting 0x08, Break, the 9-packet limit, the idle reset and inter-byte timeouts, copies, the power-on lockout and the self-test.
+- reproduced in the emulator: jobs without Init (section 9), the status sequence (section 6), the one-packet checksum lag, Init-on-garbage while idle, 0xFF sync-loss mode, Init while busy setting 0x08, Break, the 9-packet limit, the idle reset and inter-byte timeouts, copies, the power-on lockout and the self-test.
 
 **I** (to check on real hardware):
 
@@ -437,7 +468,7 @@ Key routines for anyone continuing: `Int_SIO2_Receiver` (B373) · `Rx_WaitByte` 
 
 ## 14. Verification by running the firmware
 
-`emulator/gbprinter_emu.py` runs this ROM on an emulated TMP87C840 (8 MHz) and drives the link like a Game Boy (`emulator/README.md` lists what is modelled and what is guessed). `emulator/claims.py` replays the cases below; all 24 checks give the result shown. Statuses are the bytes the Game Boy reads after `0x81`.
+`emulator/gbprinter_emu.py` runs this ROM on an emulated TMP87C840 (8 MHz) and drives the link like a Game Boy (`emulator/README.md` lists what is modelled and what is guessed). `emulator/claims.py` replays the cases below; all 27 checks give the result shown. Statuses are the bytes the Game Boy reads after `0x81`.
 
 | Case | Observed |
 |---|---|
@@ -452,6 +483,9 @@ Key routines for anyone continuing: `Int_SIO2_Receiver` (B373) · `Rx_WaitByte` 
 | One junk byte while idle, then data | 00 (the data had been wiped by an Init); without the junk byte: 08 |
 | Bytes after a junk first byte, no gap | all FF; after a gap > 5.12 ms the next packet is answered normally |
 | 0x88 then a bad second byte | 00 FF FF; a job loaded while idle is wiped (Print then answered 0x10) |
+| Two jobs with no Init and no pause | both print (480 motor pulses and 1,280 bytes each) |
+| Data without Print, then a job at once | 2,560 bytes printed (old data first) |
+| End-of-data without Print, then data at once | 18 (packet error) |
 | Longest gap inside a packet that is still accepted | 3.92 ms + 1.2 ms byte time = 5.12 ms |
 | Silence after the empty data packet that wipes the job | 125 ms |
 | Init while printing: status, Init reply, status | 06 0E 0E (Init ignored, 0x08 set) |

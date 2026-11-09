@@ -122,6 +122,20 @@ for _ in range(12):
     else: hi = mid
 record('silence after end-of-data that wipes the job', '125-126 ms', '%.0f-%.0f ms' % (lo, hi), '(12-13 ticks of 10.24 ms)')
 
+# 13b jobs without Init
+def ib(p): return p.m[0x85] | (p.m[0x86] << 8)
+def run_job(p, L, n):
+    for i in range(n): L.packet(0x04, IMG[i])
+    L.packet(0x04); e0 = p.enc_pulses; L.packet(0x02, bytes([1, 0x00, 0xE4, 0x40])); p.run_ms(60)
+    while L.packet(0x0F)[-1] & 0x02: p.run_ms(50)
+    return p.enc_pulses - e0, ib(p)
+p, L = fresh(); one = run_job(p, L, 2); two = run_job(p, L, 2)
+record('two jobs, no Init, no pause: motor pulses, bytes printed', '%d/1280 %d/1280' % (one[0], one[0]), '%d/%d %d/%d' % (one + two), '(the second job starts a new image by itself)')
+p, L = fresh(); L.packet(0x04, IMG[0]); L.packet(0x04, IMG[1]); three = run_job(p, L, 2)
+record('data without Print, then a job at once: bytes printed', '2560', '%d' % three[1], '(old data printed first)')
+p, L = fresh(); L.packet(0x04, IMG[0]); L.packet(0x04); a = L.packet(0x04, IMG[1])
+record('end-of-data without Print, then data at once', '18', seq(a), '(packet error; after > 130 ms of silence: accepted)')
+
 # 14 init while busy
 p, L = fresh(); load(L); L.packet(0x04); L.packet(0x02, bytes([1, 0x13, 0xE4, 0x40])); p.run_ms(300)
 a = L.packet(0x0F); b = L.packet(0x01); c = L.packet(0x0F)
