@@ -211,6 +211,21 @@ The serial interrupt only fills the 32-byte ring buffer. The main loop (A2ED–A
 - **"Unprocessed data" (0x08)** is set when a packet's data has been fully committed, which happens after its reply.
 - **No overflow check on the ring buffer.** The decoder must keep up with the link, which it does at Game Boy speeds.
 - **Printing** reads SRAM from 0x83 up to 0x85 in 32-byte chunks into the line buffer at 0x0100–0x023F.
+- **Only whole bands print cleanly [new].** Printing always runs in whole 16-row bands, rounding the stored length up. The image memory is never cleared (Init and the idle reset only reset pointers), so the rest of a partial last band is whatever the memory already held. Examples:
+  - after a job of `0x11` / `0x22` packets, a 700-byte packet of `0xFF` prints a second band made of 60 new bytes and 580 bytes of `0x22` from the previous job;
+  - right after power-on the leftover is the SRAM test pattern (00, 01 … FF repeating), which prints as stripes.
+
+  So only uncompressed data in multiples of 640 bytes prints correctly. Compressed packets avoid this, because each one is padded with zeros to whole slots. Emulator, and confirmed on a real printer by the owner: lengths that are not a multiple of 640 print glitches from what was left in memory.
+- **Packet length limits in practice:**
+
+  | Data packets (uncompressed) | Stored | Printed |
+  |---|---|---|
+  | 1 × 1024 | nothing (reply `0x10`) | nothing |
+  | 1 × 700, 1000 or 1023 | all of it | 2 bands |
+  | 2 × 1000 | 2,000 bytes | 4 bands |
+  | 6 × 1023 | 5,760 bytes (memory full; the rest dropped without an error) | 9 bands |
+
+  A compressed packet of 1024 bytes or more is dropped silently (no error), and nothing prints.
 
 ---
 
@@ -383,6 +398,7 @@ Rendering: decode the stored bytes as 2bpp tiles, 20 tiles per row, 640 bytes pe
 - RLE format, 640-byte slots, 9-slot limit;
 - palette remap and palette-0 special case;
 - self-test image and trigger;
+- confirmed on a real printer by the owner: only multiples of 640 bytes print correctly; other lengths print leftovers from memory (section 7);
 - reproduced in the emulator: the status sequence (section 6), the one-packet checksum lag, Init-on-garbage while idle, 0xFF sync-loss mode, Init while busy setting 0x08, Break, the 9-packet limit, the idle reset and inter-byte timeouts, copies, the power-on lockout and the self-test.
 
 **I** (to check on real hardware):
