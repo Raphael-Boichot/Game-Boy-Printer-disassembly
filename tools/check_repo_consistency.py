@@ -123,6 +123,9 @@ need('jumptables', proto, r'the (\d+) `jp \(PC\+A\)` jump tables', (njt,))
 used = 0x8000 - bt.get('fill', 0)
 need('used-rom', proto, r'of the ([\d.]+) KB used ROM', ('%.1f' % (used / 1000),))
 need('code-kb', proto, r'About (\d+) KB of the', (round(bt.get('code', 0) / 1000),))
+need('fill-bytes', proto, r'0xE071–0xFFDF \(([\d,]+) bytes', (fmt(bt.get('fill', 0)),))
+secs = [int(x) for x in re.findall(r'^## (\d+)\.', proto, re.M)]
+res('proto-order', secs == sorted(secs), 'sections of Printer_protocol.md in order: %s' % secs)
 
 # ---------------------------------------------------------------- links in markdown files
 for md in ('README.md', 'Printer_protocol.md', 'src/README.md', 'symbols/README.md', 'emulator/README.md'):
@@ -142,7 +145,7 @@ need('adc-range', proto, r'outside (0x35–0xD7) → "other error"', ('0x35–0x
 # ---------------------------------------------------------------- statements known to be wrong must not come back
 STALE = ['10 per pixel row', '10 bursts per row', 'regenerates the listing exactly', '30-entry', 'V_FFxx',
          'probably paper', 'Print | 0x0C', 'stops printing within', 'not done: the build only reads', 'Tab_PlaneCombine',
-         'reports 0x80 at power-on', "owner's scope", 'waiting for human validation']
+         'reports 0x80 at power-on', "owner's scope", 'waiting for human validation', 'replies 0xFF once', 'was not used and is the reference']
 for md in ('README.md', 'Printer_protocol.md', 'src/README.md', 'symbols/README.md', 'emulator/README.md'):
     hits = [x for x in STALE if x in rd(md)]
     res('stale', not hits, '%s: %s' % (md, hits if hits else 'no known-wrong statement'))

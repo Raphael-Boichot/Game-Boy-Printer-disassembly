@@ -10,6 +10,7 @@ junk byte while idle wipes data (next data reply)          expected 00 vs 08    
 bytes after a junk first byte (no gap)                     expected FF FF FF FF FF FF FF FF FF FF observed FF FF FF FF FF FF FF FF FF FF MATCH 
 next packet after a >5.12 ms gap                           expected 81 00          observed 81 00          MATCH 
 0x88 then bad second byte: replies to bytes 2-4            expected 00 FF FF       observed 00 FF FF       MATCH 
+job loaded, then 88 00 and a gap, then Print               expected 10             observed 10             MATCH (the bad second byte posted an Init)
 longest gap inside a packet that is still accepted         expected 3.91-3.93 ms   observed 3.91-3.93 ms   MATCH (+1.2 ms byte time = 5.12 ms)
 silence after end-of-data that wipes the job               expected 125-126 ms     observed 125-126 ms     MATCH (12-13 ticks of 10.24 ms)
 init while printing: status, init reply, status            expected 06 0E 0E       observed 06 0E 0E       MATCH (init ignored, 0x08 set)
@@ -22,4 +23,4 @@ battery ADC 0x70 at power-on: two status replies           expected FF FF       
 head temp ADC 0x20 at power-on: status                     expected FF             observed FF             MATCH (lockout never lifted)
 encoder stops mid-print: status, init, status              expected 28 28 28       observed 28 28 28       MATCH 
 
-23 checks, 23 match, 0 differ
+24 checks, 24 match, 0 differ

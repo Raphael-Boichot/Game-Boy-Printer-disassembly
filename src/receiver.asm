@@ -32,7 +32,9 @@ Int_SIO2_Receiver:
 ; Rx_PacketStart  [C]
 ;   First byte of a packet: must be 0x88 (0x11 bit-reversed), else
 ;   Rx_SyncLost. While PowerOnLock is set (homing not finished) the packet is
-;   dropped with a 0xFF reply. Then waits for 0x33 (0xCC bit-reversed).
+;   dropped with a 0xFF reply. Then waits for 0x33 (0xCC bit-reversed): a bad
+;   second byte also goes to Rx_SyncLost (the jrs T at B3B3 is always taken,
+;   because the jr before it sets JF).
 ;==============================================================================
 Rx_PacketStart:
         ld HL,Sio2Buf

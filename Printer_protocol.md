@@ -12,7 +12,7 @@ This document derives the Game Boy Printer protocol from the printer's own firmw
 
 | Topic | Firmware behaviour | Where |
 |---|---|---|
-| Sync | two separate bytes, 0x88 then 0x33, each tested on its own (not a 16-bit word). A bad first byte puts the printer in "reply 0xFF" mode until the line goes quiet, and **posts an Init if the printer is idle** | B38A, B3BF |
+| Sync | two separate bytes, 0x88 then 0x33, each tested on its own (not a 16-bit word). A bad first **or second** byte puts the printer in "reply 0xFF" mode until the line goes quiet, and **posts an Init if the printer is idle** | B38A, B3BF |
 | Header | command, compression flag, length as two bytes, **low byte first** (640 = `80 02`) | B3E2–B4C2 |
 | Checksum | sum of command, compression, both length bytes and every payload byte, kept modulo 0x10000; sent as two bytes, **low byte first** | accumulator at 0x414 |
 | Reply | `0x81` then the status byte, in the two byte slots after the checksum | B691 |
@@ -33,7 +33,7 @@ This document derives the Game Boy Printer protocol from the printer's own firmw
 
 ## 2. Firmware and hardware
 
-The printer runs a **Toshiba TLCS-870** 8-bit microcontroller, not a Z80/SM83. The 32 KB ROM is mapped at 0x8000–0xFFFF; reset vector 0xFFFE → 0x8000. Code and data end at 0xE070; the rest (8,079 bytes) is 0xFF fill. Register names come from MAME's TMP87PH40AN model, the one-time-programmable version of the same chip; the Toshiba datasheet (`TMP87C840_Toshiba.pdf`) was not used and is the reference to check them against.
+The printer runs a **Toshiba TLCS-870** 8-bit microcontroller, not a Z80/SM83. The 32 KB ROM is mapped at 0x8000–0xFFFF; reset vector 0xFFFE → 0x8000. Code and data end at 0xE070; 0xE071–0xFFDF (8,047 bytes, including the unused CALLV table at 0xFFC0) is 0xFF fill, and the interrupt vectors fill 0xFFE0–0xFFFF. Register names follow MAME's TMP87PH40AN model (the one-time-programmable version of the same chip) and the Toshiba datasheet (`TMP87C840_Toshiba.pdf`, a scan); the register addresses, the timer clocks, the watchdog codes, the SIO and ADC control bits and the register-bank layout were checked against its figures.
 
 Boot (0x8000): `di`, `ld SP,$043F`, watchdog disabled by writing 0xB1 to WDTCR2 (0x35), ports configured, RAM 0x0048–0x043F cleared, SRAM test, timers and SIO2 configured, ADC battery check, then the main loop at 0x80D5.
 
@@ -106,7 +106,7 @@ The printer is the clocked side (the Game Boy drives the clock), and its serial 
 | # | Game Boy sends | Printer returns | Firmware handling |
 |---|---|---|---|
 | 0 | 0x88 | 0x00 | anything else → sync-loss mode (section 9) |
-| 1 | 0x33 | 0x00 | anything else → reply 0xFF once, packet dropped |
+| 1 | 0x33 | 0x00 | anything else → sync-loss mode, as for byte 0 |
 | 2 | command | 0x00 | stored at 0x3EC; checksum starts here |
 | 3 | compression (0/1) | 0x00 | 0x3ED; summed |
 | 4 | length low | 0x00 | 0x3EE; summed |
@@ -261,7 +261,7 @@ When the job starts (871D), the firmware reads the head temperature on ADC chann
 
 - the base on-time from the 256-entry table at **0xCEF6** (by temperature);
 - heat time `0x78` = base + exposure offset;
-- a second timing value from the table at **0xD076** (by temperature) → 0xF9.
+- the white-dot cooling step from `Tab_IdleCoolByTemp` (**0xD076**, by temperature) → 0xF9 (`IdleCool`, used by the head energy model below).
 
 A temperature reading outside 0x35–0xD7 aborts with "other error" instead. Hotter heads get shorter pulses; the exposure byte only shifts that curve.
 
@@ -316,14 +316,14 @@ The tick length itself (`TREG1A`, µs) = `Tab_TickCurves*[BandIndex][step]` − 
 
 ## 9. Errors and timeouts
 
-**Sync loss (bad first byte).** If the first byte of a packet is not 0x88, or flag `DA.4` is set, the receiver (B3BF):
+**Sync loss (bad sync byte).** If the first byte of a packet is not 0x88, the second is not 0x33, or flag `DA.4` is set, the receiver (B3BF):
 
 1. posts an **Init request if the printer is not printing**, so line noise while idle wipes the buffer;
-2. replies **0xFF** to that byte and to every following byte;
+2. replies **0xFF** to every following byte (the bad byte itself was already answered 0x00, since a reply is loaded one byte ahead);
 3. if printing, sets `DA.4`, so every later packet until the job ends is also treated as garbage;
 4. stays in this loop until the TC4 inter-byte timeout fires (a gap on the line).
 
-**Bad second byte.** If the second byte is not 0x33, the printer replies 0xFF once and drops the packet, with no Init.
+A bad second byte takes the same path (B3B3: `jrs T` after a `jr` is always taken, because every jump sets JF), so it also wipes a job loaded while idle. In the emulator, Init, data, the empty data packet, then `88 00`, a gap, and Print: the Print reply is 0x10 and nothing prints.
 
 **Power-on lockout.** Flag `71.5` is set at boot and cleared by the mechanism state machine (B0E7, B31F). Until then, every 0x88 is answered with 0xFF and the packet is dropped (unless a paper jam is already flagged).
 
@@ -373,7 +373,7 @@ The 1,280-byte block at 0xA57E–0xAA7D is **not** an image; it is repeating loo
 Essential:
 
 1. Answer 0x00 to every byte except the two reply slots: `0x81`, then status.
-2. Sync on `88 33`. On a bad first byte, answer 0xFF until a gap in the traffic; if idle, also reset (Init).
+2. Sync on `88 33`. On a bad first or second byte, answer 0xFF until a gap in the traffic; if idle, also reset (Init).
 3. Accumulate the checksum (modulo 0x10000) over command, compression, both length bytes and payload; read the length and the checksum low byte first.
 4. Data: accept only between Init (or a finished print) and the empty data packet; keep at most 9 × 640 bytes.
 5. RLE-decode compressed packets; pad each compressed packet to a whole 640-byte slot; don't pad uncompressed packets.
@@ -420,9 +420,24 @@ The signals themselves are confirmed by the schematic: INT3 = encoder from CN1 p
 
 ---
 
+## 13. Method and files
+
+- `src/` + `Makefile`: the editable source tree; `make check` rebuilds the ROM (md5 checked). `tools/make_source.py` writes it from the listing.
+- `tools/build_listing.py`: builds `TMP87C840_printer_rom.asm` from the symbol files in `symbols/` (names, RAM, flag bits, registers, data types), with checks, and reassembles the listing text with `tools/t870asm.py`; the result must give the ROM md5 again (`symbols/README.md`).
+- `tools/t870.py`: a TLCS-870 disassembler written for this work, based on MAME's `tlcs870d.cpp` opcode map. Note: `T`/`F` jump conditions test the CPU's JF flag; they are not always/never. After `test`, `jr T` is taken when the bit is **0**.
+- `tools/trace.py`: the first plain tracer, kept for reference (unnamed listing). The tracing rules live on in `tools/build_listing.py`: recursive descent from the 16 interrupt vectors, following calls, branches and the 33 `jp (PC+A)` jump tables (one 31-entry mechanism state table at 0xAB65, and 32 tables at 0xBED7–0xCA58 in the strobe-table writers). About 16 KB of the 24.7 KB used ROM is code; the rest is tables and the self-test image.
+- `TMP87C840_printer_rom.asm`: the annotated listing generated from `symbols/` (named routines, states, tables, RAM, flag bits and registers, each tagged; 898 short branch targets keep automatic `Lxxxx` / `Jxxxx` labels).
+- `tools/check_repo_consistency.py`: checks every number quoted in the docs, that the generated files are fresh, the links, and the builds (`--slow` also re-runs the emulator checks).
+- `printer_test_image.png`: the self-test band rendered 4×.
+- `emulator/`: the firmware emulator and the protocol checks of section 14.
+
+Key routines for anyone continuing: `Int_SIO2_Receiver` (B373) · `Rx_WaitByte` (B9B4) · `Int_TC4_ByteTimeout` (B99E) · `Main_Loop` (80D5) · `Main_Commands` (8564) · `Cmd_Print` (85AB) · `Data_Main` (A2ED) · `Rle_NextByte` (A4C0) · `Sram_Read` / `Sram_Write` (A48F / A4A4) · `Sub_CheckTempBattery` (A409) · `Int_INT3_Encoder` and `Mech_Dispatch` (AAED, AB62) · `Line_FirstColumn` and the `Line_Column*` chain (8808, BA51-BBED) · `Boot_SramTest` (DD85) · `SelfTest_Load` (DDAD).
+
+---
+
 ## 14. Verification by running the firmware
 
-`emulator/gbprinter_emu.py` runs this ROM on an emulated TMP87C840 (8 MHz) and drives the link like a Game Boy (`emulator/README.md` lists what is modelled and what is guessed). `emulator/claims.py` replays the cases below; all 23 checks give the result shown. Statuses are the bytes the Game Boy reads after `0x81`.
+`emulator/gbprinter_emu.py` runs this ROM on an emulated TMP87C840 (8 MHz) and drives the link like a Game Boy (`emulator/README.md` lists what is modelled and what is guessed). `emulator/claims.py` replays the cases below; all 24 checks give the result shown. Statuses are the bytes the Game Boy reads after `0x81`.
 
 | Case | Observed |
 |---|---|
@@ -436,7 +451,7 @@ The signals themselves are confirmed by the schematic: INT3 = encoder from CN1 p
 | Two status polls after data | 00 00 (the poll clears 0x08) |
 | One junk byte while idle, then data | 00 (the data had been wiped by an Init); without the junk byte: 08 |
 | Bytes after a junk first byte, no gap | all FF; after a gap > 5.12 ms the next packet is answered normally |
-| 0x88 then a bad second byte | 00 FF FF |
+| 0x88 then a bad second byte | 00 FF FF; a job loaded while idle is wiped (Print then answered 0x10) |
 | Longest gap inside a packet that is still accepted | 3.92 ms + 1.2 ms byte time = 5.12 ms |
 | Silence after the empty data packet that wipes the job | 125 ms |
 | Init while printing: status, Init reply, status | 06 0E 0E (Init ignored, 0x08 set) |
@@ -460,18 +475,3 @@ The power-on sequence in the emulator:
 3. Idle at about 1.2 s.
 
 Packets sent before step 3 are answered 0xFF.
-
----
-
-## 13. Method and files
-
-- `src/` + `Makefile`: the editable source tree; `make check` rebuilds the ROM (md5 checked). `tools/make_source.py` writes it from the listing.
-- `tools/build_listing.py`: builds `TMP87C840_printer_rom.asm` from the symbol files in `symbols/` (names, RAM, flag bits, registers, data types), with checks, and reassembles the listing text with `tools/t870asm.py`; the result must give the ROM md5 again (`symbols/README.md`).
-- `tools/t870.py`: a TLCS-870 disassembler written for this work, based on MAME's `tlcs870d.cpp` opcode map. Note: `T`/`F` jump conditions test the CPU's JF flag; they are not always/never. After `test`, `jr T` is taken when the bit is **0**.
-- `tools/trace.py`: the first plain tracer, kept for reference (unnamed listing). The tracing rules live on in `tools/build_listing.py`: recursive descent from the 16 interrupt vectors, following calls, branches and the 33 `jp (PC+A)` jump tables (one 31-entry mechanism state table at 0xAB65, and 32 tables at 0xBED7–0xCA58 in the strobe-table writers). About 16 KB of the 24.7 KB used ROM is code; the rest is tables and the self-test image.
-- `TMP87C840_printer_rom.asm`: the annotated listing generated from `symbols/` (named routines, states, tables, RAM, flag bits and registers, each tagged; 898 short branch targets keep automatic `Lxxxx` / `Jxxxx` labels).
-- `tools/check_repo_consistency.py`: checks every number quoted in the docs, that the generated files are fresh, the links, and the builds (`--slow` also re-runs the emulator checks).
-- `printer_test_image.png`: the self-test band rendered 4×.
-- `emulator/`: the firmware emulator and the protocol checks of section 14.
-
-Key routines for anyone continuing: `Int_SIO2_Receiver` (B373) · `Rx_WaitByte` (B9B4) · `Int_TC4_ByteTimeout` (B99E) · `Main_Loop` (80D5) · `Main_Commands` (8564) · `Cmd_Print` (85AB) · `Data_Main` (A2ED) · `Rle_NextByte` (A4C0) · `Sram_Read` / `Sram_Write` (A48F / A4A4) · `Sub_CheckTempBattery` (A409) · `Int_INT3_Encoder` and `Mech_Dispatch` (AAED, AB62) · `Line_FirstColumn` and the `Line_Column*` chain (8808, BA51-BBED) · `Boot_SramTest` (DD85) · `SelfTest_Load` (DDAD).

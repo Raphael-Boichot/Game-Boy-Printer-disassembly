@@ -89,6 +89,10 @@ record('next packet after a >5.12 ms gap', '81 00', '%02X %02X' % (d[-2], d[-1])
 p, L = fresh()
 rx = [L.xfer(x) for x in (0x88, 0x00, 0x0F, 0x00)]
 record('0x88 then bad second byte: replies to bytes 2-4', '00 FF FF', ' '.join(hx(x) for x in rx[1:]))
+p, L = fresh(); load(L); L.packet(0x04)
+for x in (0x88, 0x00): L.xfer(x)
+p.run_ms(10); a = L.packet(0x02, bytes([1, 0x13, 0xE4, 0x40]))
+record('job loaded, then 88 00 and a gap, then Print', '10', seq(a), '(the bad second byte posted an Init)')
 
 # 12 inter-byte gap timeout
 def gap_test(gap_ms):
