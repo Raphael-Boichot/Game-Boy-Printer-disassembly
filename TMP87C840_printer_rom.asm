@@ -133,7 +133,7 @@ JobFlags         equ $00E1   ; [C] 1 byte(s). print job flags
 ;   .4 SioRearm       [C] serial watchdog armed: re-arm SIO2 after SioIdleTimer if no packet is in progress
 ;   .5 BattCheckDue   [C] battery check under load (TC3) due
 ;   .6 InitDeferred   [I] Init accepted while a job other than the button feed was starting: run when the job ends
-;   .7 BattSample     [C] first strobe burst of a job: read the battery under load (low battery at <= 0x7E, or a sag of 8 below BattAtStart when <= 0x9C)
+;   .7 BattSample     [C] set by the power-on homing: TC1 reads the battery once with the motor running (low battery at <= 0x7E, or a sag of 8 below BattAtStart when <= 0x9C)
 SlotBase         equ $00E2   ; [C] 2 byte(s). SRAM slot base (multiple of 0x280)
 SlotOffset       equ $00E4   ; [C] 2 byte(s). offset in the current 640-byte slot
 RleByte          equ $00E6   ; [C] 1 byte(s). RLE repeated byte
@@ -149,7 +149,7 @@ EncoderTimeout   equ $00F3   ; [C] 1 byte(s). ticks without an encoder pulse (ja
 CamTimeout       equ $00F4   ; [C] 1 byte(s). steps of 8 encoder pulses without a cam sensor change (jam at overflow)
 SelfTest         equ $00F5   ; [C] 1 byte(s). 1 = self-test requested at power-on
 StartDelay       equ $00F6   ; [C] 1 byte(s). delay before a job or the next copy: 0xF4 -> 0 (12 ticks)
-IdleDelay        equ $00F7   ; [I] 1 byte(s). tick counter before idle mode
+IdleDelay        equ $00F7   ; [I] 1 byte(s). counts 100 ticks (from 0x9C) with no job between two head-heat decay steps
 TileColumnsLeft  equ $00F8   ; [C] 1 byte(s). tile columns left in the band (20 per band)
 IdleCool         equ $00F9   ; [C] 1 byte(s). Tab_IdleCoolByTemp value for the current temperature
 DotMask          equ $00FA   ; [C] 2 byte(s). 16 bits: rows with a printed dot in this column
@@ -173,7 +173,7 @@ PktChecksum      equ $0414   ; [C] 2 byte(s). running checksum
 PktRemaining     equ $0416   ; [C] 2 byte(s). payload bytes left
 EncoderIdleCount equ $0418   ; [C] 1 byte(s). encoder pulses while idle with no job (from 0xE5); on overflow P5.3 is cleared
 HeatCurvePtr     equ $0419   ; [C] 2 byte(s). tick curve of the current band (from Tab_TickCurvePtrsWarm / Cold)
-BattAtStart      equ $041B   ; [C] 1 byte(s). battery reading (no load) at job start; compared with the reading under load
+BattAtStart      equ $041B   ; [C] 1 byte(s). battery reading (no load) at the start of the power-on homing; compared with the reading under load
 ActivityTimer    equ $041C   ; [C] 1 byte(s). reloaded with 0xF3 by every received byte; idle reset when it wraps
 LowBatHoldTimer  equ $041D   ; [I] 1 byte(s). loaded with 0x6D at boot and on entering idle; counts ticks while low battery is set and no job runs; at 0 clears LowBatHold
 HeatSoak         equ $041E   ; [C] 1 byte(s). bands printed since the head was last cold (max 40); indexes Tab_TickTrimBySoak
@@ -184,8 +184,9 @@ Sio2Buf          equ $0FF8   ; [C] 8 byte(s). SIO2 data buffer (shared transmit 
 ;==============================================================================
 ; Reset  [C]
 ;   Power-on entry. Disables interrupts, sets the stack to 0x043F, switches the
-;   watchdog off (WDTCR2 = 0xB1), sets the port directions and levels, clears
-;   RAM 0x0048-0x043F, and sets the power-on flags (PowerOnLock, ReqHoming).
+;   watchdog off for the boot (WDTCR2 = 0xB1; enabled again at 80D2, WDTCR1 =
+;   0x0F), sets the port directions and levels, clears RAM 0x0048-0x043F, and
+;   sets the power-on flags (PowerOnLock, ReqHoming).
 ;   Then: SRAM test (Boot_SramTest), timers TC2 (10.24 ms tick) and TC4
 ;   (inter-byte timeout), SIO2 in 8-bit transmit/receive mode with external
 ;   clock, interrupt enables, a first battery reading, and the self-test check:
@@ -387,8 +388,9 @@ L8154:
 
 ;==============================================================================
 ; Heat_DecayIdle  [C]
-;   Head-heat decay while idle: reads the temperature (ADC channel 0) and
-;   multiplies each of the 16 RowHeat accumulators by Tab_DecayByTemp[t] / 256.
+;   Head-heat decay while idle, once per 1.0 s idle tick: reads the temperature
+;   (ADC channel 0) and multiplies each of the 16 RowHeat accumulators by
+;   Tab_DecayByTemp[t] / 256.
 ;==============================================================================
 Heat_DecayIdle:
   815A  2c0e00     ld (ADCCR),$00
@@ -597,7 +599,7 @@ L82D6:
 
 ;==============================================================================
 ; Main_IdleResetTimer  [C]
-;   Idle reset. While not printing, ActivityTimer (reloaded with 0xF3 by every
+;   Idle reset. While not busy, ActivityTimer (reloaded with 0xF3 by every
 ;   received byte) counts up once per tick; when it wraps (13 ticks, about
 ;   123-133 ms of silence) the printer clears exactly what Init clears: image
 ;   memory pointers, image-full, unprocessed (unless jammed), packet error,
@@ -725,8 +727,10 @@ L83A5:
 
 ;==============================================================================
 ; Heat_DecayTick  [C]
-;   Head-heat decay, once per tick while working: reads the temperature and
-;   multiplies each RowHeat accumulator by Tab_DecayByTemp[t] / 256.
+;   Head-heat decay while awake with no job: every 100 ticks (IdleDelay, loaded
+;   with 0x9C; about 1.02 s) reads the temperature and multiplies each RowHeat
+;   accumulator by Tab_DecayByTemp[t] / 256. Never runs during a job: IdleDelay
+;   is reloaded while a mechanism state is active.
 ;==============================================================================
 Heat_DecayTick:
   83AF  2c0e00     ld (ADCCR),$00
@@ -887,10 +891,11 @@ L83B4:
 
 ;==============================================================================
 ; Main_LowBattery  [C]
-;   Low-battery follow-up. Once a reply has carried the low-battery bit
-;   (RxFlags.LowBatReported) and LowBatTimer has run out, or when low battery
-;   is held while idle, clears P5.3 (the head-supply latch, SysFlags.SupplyCut).
-;   P5.3 is never set again.
+;   Low-battery follow-up. With low battery set, clears P5.3 (the head-supply
+;   latch, SysFlags.SupplyCut) once a reply has carried the bit
+;   (RxFlags.LowBatReported) and LowBatTimer has run out; or, if no reply has
+;   carried it, once LowBatHold is released and the link is silent
+;   (ActivityTimer = 0). P5.3 is never set again.
 ;==============================================================================
 Main_LowBattery:
   8505  2cf79c     ld (IdleDelay),$9C
@@ -1149,8 +1154,8 @@ L8659:
 
 ;==============================================================================
 ; Main_StartJob  [C]
-;   Starts the requested mechanism job unless an error is set (other error,
-;   paper jam): homing, print or feed.
+;   Starts the requested mechanism job unless an error is set (low battery,
+;   paper jam, other error): homing, print or feed.
 ;==============================================================================
 Main_StartJob:
   865C  d87c       test (Status).0   ; StLowBattery
@@ -1170,8 +1175,10 @@ L866E:
 
 ;==============================================================================
 ; Job_StartHoming  [C]
-;   Power-on homing request (MechRequests.ReqHoming): motor on, busy, state
-;   0x11 (Mech_State11_Homing).
+;   Power-on homing request (MechRequests.ReqHoming, set only by Reset): reads
+;   the battery at rest (BattAtStart) and sets JobFlags.BattSample, then motor
+;   on, busy, state 0x11 (Mech_State11_Homing), and a 21-tick TC1 run with the
+;   head lines off for the battery reading under load (Int_TC1_StrobeTick).
 ;==============================================================================
 Job_StartHoming:
   8672  d87c       test (Status).0   ; StLowBattery
@@ -1244,10 +1251,10 @@ Job_ButtonFeed:
 ;==============================================================================
 ; Job_StartPrint  [C]
 ;   Starts a print. Checks the temperature (Job_TempError), computes HeatTime
-;   (Job_SetHeatTime), takes the battery reading at rest (BattAtStart), chooses
-;   the tick curves (cold head if every RowHeat is 0), primes the line buffer
-;   from SRAM and prepares the first column (Line_FirstColumn). Then motor on,
-;   busy, and the top margin (state 0x14) or the first band (state 0x12).
+;   (Job_SetHeatTime), chooses the tick curves (cold head if every RowHeat is
+;   0), primes the line buffer from SRAM and prepares the first column
+;   (Line_FirstColumn). Then motor on, busy, and the top margin (state 0x14) or
+;   the first band (state 0x12).
 ;==============================================================================
 Job_StartPrint:
   86E0  da7b       test (MechRequests).2   ; ReqPrint
@@ -1404,9 +1411,10 @@ L87FD:
 ;   Line_NextColumnA/B written out once: copy the tile column
 ;   (Line_CopyColumnSource), extract the 16 dots (Line_ExtractColumn),
 ;   history codes (Line_ColumnHistory), energy codes (Line_ColumnEnergy), then
-;   for each row adds the dot's heat to RowHeat (Tab_HeatAddByCode,
-;   Tab_HeatAddFreshByTemp after a white dot, IdleCool for a white dot) and
-;   records the printed rows in DotMask.
+;   for each row adds the dot's heat to RowHeat: Tab_HeatAddByCode[code]; or
+;   Tab_HeatAddFreshByTemp for the first printed dot of the row in the band
+;   (DotMask bit clear) when the previous dot was white; or IdleCool when the
+;   table gives 0. Records the printed rows in DotMask.
 ;==============================================================================
 Line_FirstColumn:
   8808  fc51ba     call Line_ExtractColumn
@@ -5713,9 +5721,10 @@ Tab_SramLayout:
 ; Int_TC1_StrobeTick  [C]
 ;   TC1 interrupt, one strobe tick (TREG1A us). Writes the next byte pair of
 ;   the current strobe table to P0/P1 (the 16 head dots). After 33 ticks it
-;   clears the ports and stops TC1. On the first burst of a job
-;   (JobFlags.BattSample) it reads the battery under load: low battery at or
-;   below 0x7E, or a sag of 8 below BattAtStart when at or below 0x9C.
+;   clears the ports and stops TC1. Once after power-on (JobFlags.BattSample,
+;   set by Job_StartHoming) it then reads the battery with the motor running:
+;   low battery at or below 0x7E, or a sag of 8 below BattAtStart when at or
+;   below 0x9C.
 ;==============================================================================
 Int_TC1_StrobeTick:
   AA7E  0f01       ld RBS,1
@@ -6846,8 +6855,10 @@ LB321:
 
 ;==============================================================================
 ; Mech_State18_Stop  [C]
-;   State 0x18, stop (low battery or Break): motor off, busy cleared, job
-;   ended.
+;   State 0x18, stop: low battery, Break, or the end of a print with no
+;   after-margin. Runs the motor to the cam home position, then motor off and
+;   state 0; unless a Break is pending, requests the next copy. Busy is cleared
+;   by the main loop (Main_JobControl).
 ;==============================================================================
 Mech_State18_Stop:
   B328  17fe00     ld HL,MechSubState
@@ -6970,9 +6981,9 @@ Rx_Exit:
 
 ;==============================================================================
 ; Rx_SyncLost  [C]
-;   Bad first byte: if not printing, posts an Init (line noise while idle wipes
-;   the job); while printing, every packet until the job ends is treated as
-;   junk. Answers 0xFF to every byte until the inter-byte timeout ends the
+;   Bad first or second byte: if not printing, posts an Init (line noise while
+;   idle wipes the job); while busy, every packet until busy clears is treated
+;   as junk. Answers 0xFF to every byte until the inter-byte timeout ends the
 ;   packet.
 ;==============================================================================
 Rx_SyncLost:
@@ -11111,7 +11122,7 @@ Tab_BandCoolByTemp:
   DA66  00000000000000000000000000000000 dw $0000, $0000, $0000, $0000, $0000, $0000, $0000, $0000
 
 Tab_DecayByTemp:
-; [C] per-tick heat decay factor (/256), by temperature
+; [C] heat decay factor (/256) per decay step (about 1 s, no job running), by temperature
   DA76  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   DA86  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   DA96  00000000000000000000000000000000 db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
@@ -11136,7 +11147,7 @@ Tab_TickCurvePtrsWarm:
   DB86  50dc                             dw $DC50
 
 Tab_TickCurvesWarm:
-; [C] 9 curves x 25 steps: strobe tick length (us) per step of a band, head warm
+; [C] 9 curves x 25 steps: strobe tick length (us) per step of a band, head warm; only steps 12-21 are read (LineCounter 13-22)
 ; bytes DB88-DC68: [C] one row per band
   DB88  64646464646464646464646466646261605f5e5e5d5d646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $66, $64, $62, $61, $60, $5F, $5E, $5E, $5D, $5D, $64, $64, $64
   DBA1  64646464646464646464646462605f5e5d5d5c5b5b5b646464 db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $62, $60, $5F, $5E, $5D, $5D, $5C, $5B, $5B, $5B, $64, $64, $64

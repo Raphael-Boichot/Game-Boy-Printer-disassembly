@@ -98,8 +98,9 @@ L8154:
 
 ;==============================================================================
 ; Heat_DecayIdle  [C]
-;   Head-heat decay while idle: reads the temperature (ADC channel 0) and
-;   multiplies each of the 16 RowHeat accumulators by Tab_DecayByTemp[t] / 256.
+;   Head-heat decay while idle, once per 1.0 s idle tick: reads the temperature
+;   (ADC channel 0) and multiplies each of the 16 RowHeat accumulators by
+;   Tab_DecayByTemp[t] / 256.
 ;==============================================================================
 Heat_DecayIdle:
         ld (ADCCR),$00
@@ -308,7 +309,7 @@ L82D6:
 
 ;==============================================================================
 ; Main_IdleResetTimer  [C]
-;   Idle reset. While not printing, ActivityTimer (reloaded with 0xF3 by every
+;   Idle reset. While not busy, ActivityTimer (reloaded with 0xF3 by every
 ;   received byte) counts up once per tick; when it wraps (13 ticks, about
 ;   123-133 ms of silence) the printer clears exactly what Init clears: image
 ;   memory pointers, image-full, unprocessed (unless jammed), packet error,
@@ -436,8 +437,10 @@ L83A5:
 
 ;==============================================================================
 ; Heat_DecayTick  [C]
-;   Head-heat decay, once per tick while working: reads the temperature and
-;   multiplies each RowHeat accumulator by Tab_DecayByTemp[t] / 256.
+;   Head-heat decay while awake with no job: every 100 ticks (IdleDelay, loaded
+;   with 0x9C; about 1.02 s) reads the temperature and multiplies each RowHeat
+;   accumulator by Tab_DecayByTemp[t] / 256. Never runs during a job: IdleDelay
+;   is reloaded while a mechanism state is active.
 ;==============================================================================
 Heat_DecayTick:
         ld (ADCCR),$00
@@ -598,10 +601,11 @@ L83B4:
 
 ;==============================================================================
 ; Main_LowBattery  [C]
-;   Low-battery follow-up. Once a reply has carried the low-battery bit
-;   (RxFlags.LowBatReported) and LowBatTimer has run out, or when low battery
-;   is held while idle, clears P5.3 (the head-supply latch, SysFlags.SupplyCut).
-;   P5.3 is never set again.
+;   Low-battery follow-up. With low battery set, clears P5.3 (the head-supply
+;   latch, SysFlags.SupplyCut) once a reply has carried the bit
+;   (RxFlags.LowBatReported) and LowBatTimer has run out; or, if no reply has
+;   carried it, once LowBatHold is released and the link is silent
+;   (ActivityTimer = 0). P5.3 is never set again.
 ;==============================================================================
 Main_LowBattery:
         ld (IdleDelay),$9C
@@ -860,8 +864,8 @@ L8659:
 
 ;==============================================================================
 ; Main_StartJob  [C]
-;   Starts the requested mechanism job unless an error is set (other error,
-;   paper jam): homing, print or feed.
+;   Starts the requested mechanism job unless an error is set (low battery,
+;   paper jam, other error): homing, print or feed.
 ;==============================================================================
 Main_StartJob:
         test (Status).0   ; StLowBattery
@@ -881,8 +885,10 @@ L866E:
 
 ;==============================================================================
 ; Job_StartHoming  [C]
-;   Power-on homing request (MechRequests.ReqHoming): motor on, busy, state
-;   0x11 (Mech_State11_Homing).
+;   Power-on homing request (MechRequests.ReqHoming, set only by Reset): reads
+;   the battery at rest (BattAtStart) and sets JobFlags.BattSample, then motor
+;   on, busy, state 0x11 (Mech_State11_Homing), and a 21-tick TC1 run with the
+;   head lines off for the battery reading under load (Int_TC1_StrobeTick).
 ;==============================================================================
 Job_StartHoming:
         test (Status).0   ; StLowBattery
@@ -955,10 +961,10 @@ Job_ButtonFeed:
 ;==============================================================================
 ; Job_StartPrint  [C]
 ;   Starts a print. Checks the temperature (Job_TempError), computes HeatTime
-;   (Job_SetHeatTime), takes the battery reading at rest (BattAtStart), chooses
-;   the tick curves (cold head if every RowHeat is 0), primes the line buffer
-;   from SRAM and prepares the first column (Line_FirstColumn). Then motor on,
-;   busy, and the top margin (state 0x14) or the first band (state 0x12).
+;   (Job_SetHeatTime), chooses the tick curves (cold head if every RowHeat is
+;   0), primes the line buffer from SRAM and prepares the first column
+;   (Line_FirstColumn). Then motor on, busy, and the top margin (state 0x14) or
+;   the first band (state 0x12).
 ;==============================================================================
 Job_StartPrint:
         test (MechRequests).2   ; ReqPrint

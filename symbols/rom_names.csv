@@ -3,13 +3,13 @@ addr,name,tag,note
 80A8,Boot_SettleDelay,C,"65,536-step busy-wait before the first battery reading"
 80D5,Main_Loop,C,"main loop: watchdog clear, idle entry check, then the tick work"
 8128,Main_EnterIdle,C,nothing to do: slow tick (TREG2 0x03D5 = 1.0 s) and IDLE mode until an interrupt
-815A,Heat_DecayIdle,C,per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
+815A,Heat_DecayIdle,C,per 1.0 s idle tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
 82B6,Main_CheckTempBattery,C,periodic temperature and battery check (Sub_CheckTempBattery)
 82BB,Main_Wake,C,"back from idle: clear SysFlags.Idle, reload EncoderIdleCount"
 82D0,Main_Tick,C,work done once per 10.24 ms tick (flag E0.7)
 82DC,Main_IdleResetTimer,C,counts ActivityTimer while not busy; wrap = reset as Init
 8379,Main_StartDelay,C,"counts StartDelay (12 ticks, about 123 ms) before a job or the next copy starts"
-83AF,Heat_DecayTick,C,per tick: RowHeat *= Tab_DecayByTemp[temperature] / 256
+83AF,Heat_DecayTick,C,every 100 ticks with no job: RowHeat *= Tab_DecayByTemp[temperature] / 256
 8505,Main_LowBattery,C,"after low battery: once reported (and LowBatTimer expired) or held while idle, clear P5.3"
 8529,Main_CamWatchdog,C,jam if the cam sensor does not change within 13 steps (high) / 51 steps (low) of 8 encoder pulses
 8564,Main_Commands,C,run the commands posted by the receiver (CmdRequests)
@@ -148,9 +148,9 @@ D576,Tab_HeatCorr1,C,"energy correction for grey level 1, by row heat (RowHeatIn
 D676,Tab_HeatCorr2,C,"energy correction for grey level 2, by row heat (RowHeatInt)"
 D776,Tab_HeatCorr3,C,"energy correction for grey level 3, by row heat (RowHeatInt)"
 D876,Tab_BandCoolByTemp,C,"256 words: heat removed from every row at a band change, by temperature"
-DA76,Tab_DecayByTemp,C,"per-tick heat decay factor (/256), by temperature"
+DA76,Tab_DecayByTemp,C,"heat decay factor (/256) per decay step (about 1 s, no job running), by temperature"
 DB76,Tab_TickCurvePtrsWarm,C,9 pointers (one per band) into Tab_TickCurvesWarm
-DB88,Tab_TickCurvesWarm,C,"9 curves x 25 steps: strobe tick length (us) per step of a band, head warm"
+DB88,Tab_TickCurvesWarm,C,"9 curves x 25 steps: strobe tick length (us) per step of a band, head warm; only steps 12-21 are read (LineCounter 13-22)"
 DC69,Tab_TickCurvePtrsCold,C,9 pointers into Tab_TickCurvesCold
 DC7B,Tab_TickCurvesCold,C,9 curves x 25 steps: tick length when every row heat is zero (slightly longer)
 DD5C,Tab_TickTrimBySoak,C,"41 values subtracted from the tick length, by HeatSoak (bands since the head was cold)"

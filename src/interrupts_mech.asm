@@ -5,9 +5,10 @@
 ; Int_TC1_StrobeTick  [C]
 ;   TC1 interrupt, one strobe tick (TREG1A us). Writes the next byte pair of
 ;   the current strobe table to P0/P1 (the 16 head dots). After 33 ticks it
-;   clears the ports and stops TC1. On the first burst of a job
-;   (JobFlags.BattSample) it reads the battery under load: low battery at or
-;   below 0x7E, or a sag of 8 below BattAtStart when at or below 0x9C.
+;   clears the ports and stops TC1. Once after power-on (JobFlags.BattSample,
+;   set by Job_StartHoming) it then reads the battery with the motor running:
+;   low battery at or below 0x7E, or a sag of 8 below BattAtStart when at or
+;   below 0x9C.
 ;==============================================================================
 Int_TC1_StrobeTick:
         ld RBS,1
@@ -1138,8 +1139,10 @@ LB321:
 
 ;==============================================================================
 ; Mech_State18_Stop  [C]
-;   State 0x18, stop (low battery or Break): motor off, busy cleared, job
-;   ended.
+;   State 0x18, stop: low battery, Break, or the end of a print with no
+;   after-margin. Runs the motor to the cam home position, then motor off and
+;   state 0; unless a Break is pending, requests the next copy. Busy is cleared
+;   by the main loop (Main_JobControl).
 ;==============================================================================
 Mech_State18_Stop:
         ld HL,MechSubState

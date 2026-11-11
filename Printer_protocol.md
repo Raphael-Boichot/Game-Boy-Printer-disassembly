@@ -298,20 +298,20 @@ Each dot gets its own on-window inside the 33-tick burst. The window is computed
 
    A dot that was already hot gets less energy.
 3. **Heat of each element.** `RowHeat` (16 words, 8.8 fixed point) models the temperature of each of the 16 head elements:
-   - per column, a printed dot adds `Tab_HeatAddByCode[code]` (0xD176), or `Tab_HeatAddFreshByTemp` (0xD276) when it follows a white dot;
+   - per column, a printed dot adds `Tab_HeatAddByCode[code]` (0xD176), or `Tab_HeatAddFreshByTemp` (0xD276) for the first printed dot of its row in the band when the previous dot was white;
    - a white dot changes it by `Tab_IdleCoolByTemp` (0xD076, usually a decrease);
-   - every 10.24 ms tick multiplies it by `Tab_DecayByTemp[t]` / 256 (0xDA76);
+   - with no job running, about once a second (every 100 ticks awake, or every 1.0 s idle tick) it is multiplied by `Tab_DecayByTemp[t]` / 256 (0xDA76); there is no decay during a job;
    - every band change subtracts `Tab_BandCoolByTemp[t]` (0xD876).
 
    All of these depend on the temperature reading (TH1).
 4. **Code and window.** `Line_ColumnEnergy`: code = `HeatTime` + `Tab_HeatCorr<grey>[RowHeatInt]` (one 256-byte table per grey level, 0xD476–0xD776) + history code, clamped to 0–0x64. `Tab_DotTicks` (0xCCF6) turns the code into a first tick and a tick count. Higher codes start earlier and last longer, so every dot's window ends at about the same tick. Even white dots can get a short window from their correction table, which gives the 0.02–0.15 ms pulses seen on white.
 
 The tick length itself (`TREG1A`, µs) = `Tab_TickCurves*[BandIndex][step]` − `Tab_TickTrimBySoak[HeatSoak]`:
-- 9 bands × 25 steps;
+- 9 bands × 25 steps, of which only steps 12–21 are read (one per 16 columns);
 - a warm set (0xDB88) and a cold set (0xDC7B), the cold set used when every `RowHeat` is zero;
 - the trim grows with the number of bands printed since the head was last cold (0–40).
 
-**Battery under load:** at the first burst of a job, TC1 reads the battery while the head draws current. Low battery is raised at ≤ 0x7E, or at ≤ 0x9C if the reading sagged 8 or more below the idle reading taken at job start (`BattAtStart`).
+**Battery under load:** once, during the power-on homing, TC1 reads the battery with the motor running and the head lines off (`JobFlags.BattSample` is set only by `Job_StartHoming`). Low battery is raised at ≤ 0x7E, or at ≤ 0x9C if the reading sagged 8 or more below the reading taken just before the motor started (`BattAtStart`).
 
 
 ---

@@ -4,8 +4,9 @@
 ;==============================================================================
 ; Reset  [C]
 ;   Power-on entry. Disables interrupts, sets the stack to 0x043F, switches the
-;   watchdog off (WDTCR2 = 0xB1), sets the port directions and levels, clears
-;   RAM 0x0048-0x043F, and sets the power-on flags (PowerOnLock, ReqHoming).
+;   watchdog off for the boot (WDTCR2 = 0xB1; enabled again at 80D2, WDTCR1 =
+;   0x0F), sets the port directions and levels, clears RAM 0x0048-0x043F, and
+;   sets the power-on flags (PowerOnLock, ReqHoming).
 ;   Then: SRAM test (Boot_SramTest), timers TC2 (10.24 ms tick) and TC4
 ;   (inter-byte timeout), SIO2 in 8-bit transmit/receive mode with external
 ;   clock, interrupt enables, a first battery reading, and the self-test check:

@@ -60,7 +60,7 @@ Tab_BandCoolByTemp:
         incbin "data/band_cool_by_temp.bin"   ; 512 bytes
 
 Tab_DecayByTemp:
-; [C] per-tick heat decay factor (/256), by temperature
+; [C] heat decay factor (/256) per decay step (about 1 s, no job running), by temperature
         incbin "data/decay_by_temp.bin"   ; 256 bytes
 
 Tab_TickCurvePtrsWarm:
@@ -70,7 +70,7 @@ Tab_TickCurvePtrsWarm:
         dw Tab_TickCurvesWarm_Band5, Tab_TickCurvesWarm_Band6, Tab_TickCurvesWarm_Band7, Tab_TickCurvesWarm_Band8
 
 Tab_TickCurvesWarm:
-; [C] 9 curves x 25 steps: strobe tick length (us) per step of a band, head warm
+; [C] 9 curves x 25 steps: strobe tick length (us) per step of a band, head warm; only steps 12-21 are read (LineCounter 13-22)
 ; bytes DB88-DC68: [C] one row per band
 Tab_TickCurvesWarm_Band0:
         db $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $64, $66, $64, $62, $61, $60, $5F, $5E, $5E, $5D, $5D, $64, $64, $64

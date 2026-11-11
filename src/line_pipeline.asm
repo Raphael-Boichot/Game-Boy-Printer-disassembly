@@ -7,9 +7,10 @@
 ;   Line_NextColumnA/B written out once: copy the tile column
 ;   (Line_CopyColumnSource), extract the 16 dots (Line_ExtractColumn),
 ;   history codes (Line_ColumnHistory), energy codes (Line_ColumnEnergy), then
-;   for each row adds the dot's heat to RowHeat (Tab_HeatAddByCode,
-;   Tab_HeatAddFreshByTemp after a white dot, IdleCool for a white dot) and
-;   records the printed rows in DotMask.
+;   for each row adds the dot's heat to RowHeat: Tab_HeatAddByCode[code]; or
+;   Tab_HeatAddFreshByTemp for the first printed dot of the row in the band
+;   (DotMask bit clear) when the previous dot was white; or IdleCool when the
+;   table gives 0. Records the printed rows in DotMask.
 ;==============================================================================
 Line_FirstColumn:
         call Line_ExtractColumn

@@ -79,9 +79,9 @@ Rx_Exit:
 
 ;==============================================================================
 ; Rx_SyncLost  [C]
-;   Bad first byte: if not printing, posts an Init (line noise while idle wipes
-;   the job); while printing, every packet until the job ends is treated as
-;   junk. Answers 0xFF to every byte until the inter-byte timeout ends the
+;   Bad first or second byte: if not printing, posts an Init (line noise while
+;   idle wipes the job); while busy, every packet until busy clears is treated
+;   as junk. Answers 0xFF to every byte until the inter-byte timeout ends the
 ;   packet.
 ;==============================================================================
 Rx_SyncLost:

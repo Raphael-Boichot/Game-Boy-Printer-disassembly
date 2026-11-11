@@ -93,7 +93,7 @@ JobFlags         equ $00E1   ; [C] 1 byte(s). print job flags
 ;   .4 SioRearm       [C] serial watchdog armed: re-arm SIO2 after SioIdleTimer if no packet is in progress
 ;   .5 BattCheckDue   [C] battery check under load (TC3) due
 ;   .6 InitDeferred   [I] Init accepted while a job other than the button feed was starting: run when the job ends
-;   .7 BattSample     [C] first strobe burst of a job: read the battery under load (low battery at <= 0x7E, or a sag of 8 below BattAtStart when <= 0x9C)
+;   .7 BattSample     [C] set by the power-on homing: TC1 reads the battery once with the motor running (low battery at <= 0x7E, or a sag of 8 below BattAtStart when <= 0x9C)
 SlotBase         equ $00E2   ; [C] 2 byte(s). SRAM slot base (multiple of 0x280)
 SlotOffset       equ $00E4   ; [C] 2 byte(s). offset in the current 640-byte slot
 RleByte          equ $00E6   ; [C] 1 byte(s). RLE repeated byte
@@ -109,7 +109,7 @@ EncoderTimeout   equ $00F3   ; [C] 1 byte(s). ticks without an encoder pulse (ja
 CamTimeout       equ $00F4   ; [C] 1 byte(s). steps of 8 encoder pulses without a cam sensor change (jam at overflow)
 SelfTest         equ $00F5   ; [C] 1 byte(s). 1 = self-test requested at power-on
 StartDelay       equ $00F6   ; [C] 1 byte(s). delay before a job or the next copy: 0xF4 -> 0 (12 ticks)
-IdleDelay        equ $00F7   ; [I] 1 byte(s). tick counter before idle mode
+IdleDelay        equ $00F7   ; [I] 1 byte(s). counts 100 ticks (from 0x9C) with no job between two head-heat decay steps
 TileColumnsLeft  equ $00F8   ; [C] 1 byte(s). tile columns left in the band (20 per band)
 IdleCool         equ $00F9   ; [C] 1 byte(s). Tab_IdleCoolByTemp value for the current temperature
 DotMask          equ $00FA   ; [C] 2 byte(s). 16 bits: rows with a printed dot in this column
@@ -133,7 +133,7 @@ PktChecksum      equ $0414   ; [C] 2 byte(s). running checksum
 PktRemaining     equ $0416   ; [C] 2 byte(s). payload bytes left
 EncoderIdleCount equ $0418   ; [C] 1 byte(s). encoder pulses while idle with no job (from 0xE5); on overflow P5.3 is cleared
 HeatCurvePtr     equ $0419   ; [C] 2 byte(s). tick curve of the current band (from Tab_TickCurvePtrsWarm / Cold)
-BattAtStart      equ $041B   ; [C] 1 byte(s). battery reading (no load) at job start; compared with the reading under load
+BattAtStart      equ $041B   ; [C] 1 byte(s). battery reading (no load) at the start of the power-on homing; compared with the reading under load
 ActivityTimer    equ $041C   ; [C] 1 byte(s). reloaded with 0xF3 by every received byte; idle reset when it wraps
 LowBatHoldTimer  equ $041D   ; [I] 1 byte(s). loaded with 0x6D at boot and on entering idle; counts ticks while low battery is set and no job runs; at 0 clears LowBatHold
 HeatSoak         equ $041E   ; [C] 1 byte(s). bands printed since the head was last cold (max 40); indexes Tab_TickTrimBySoak

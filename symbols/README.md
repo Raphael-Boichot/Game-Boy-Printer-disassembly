@@ -27,7 +27,7 @@ Board check: the owner's photos and the complete schematic and PCB of the IF-GBP
 | ROM | 9829 | `Line_NextColumnB` | I | same chain for the strobe tables B |
 | ROM | AAE6 | `Int_INT5_ButtonWake` | I | bare reti: the front button (P20 = INT5 pin) is enabled as an interrupt only to wake the CPU from IDLE |
 | ROM | B369 | `Mech_StateInvalid` | I | states 0x19-0x1E |
-| RAM | 00F7 | `IdleDelay` | I | tick counter before idle mode |
+| RAM | 00F7 | `IdleDelay` | I | counts 100 ticks (from 0x9C) with no job between two head-heat decay steps |
 | RAM | 041D | `LowBatHoldTimer` | I | loaded with 0x6D at boot and on entering idle; counts ticks while low battery is set and no job runs; at 0 clears LowBatHold |
 | bit | 0070.0 | `LineReady` | I | column data prepared |
 | bit | 0070.1 | `LineFetch` | I | line buffer refill pending |

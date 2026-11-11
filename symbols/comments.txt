@@ -3,8 +3,9 @@
 
 @ 8000
 Power-on entry. Disables interrupts, sets the stack to 0x043F, switches the
-watchdog off (WDTCR2 = 0xB1), sets the port directions and levels, clears
-RAM 0x0048-0x043F, and sets the power-on flags (PowerOnLock, ReqHoming).
+watchdog off for the boot (WDTCR2 = 0xB1; enabled again at 80D2, WDTCR1 =
+0x0F), sets the port directions and levels, clears RAM 0x0048-0x043F, and
+sets the power-on flags (PowerOnLock, ReqHoming).
 Then: SRAM test (Boot_SramTest), timers TC2 (10.24 ms tick) and TC4
 (inter-byte timeout), SIO2 in 8-bit transmit/receive mode with external
 clock, interrupt enables, a first battery reading, and the self-test check:
@@ -35,8 +36,9 @@ fired, decays the head-heat model (Heat_DecayIdle) or runs the temperature
 and battery check.
 
 @ 815A
-Head-heat decay while idle: reads the temperature (ADC channel 0) and
-multiplies each of the 16 RowHeat accumulators by Tab_DecayByTemp[t] / 256.
+Head-heat decay while idle, once per 1.0 s idle tick: reads the temperature
+(ADC channel 0) and multiplies each of the 16 RowHeat accumulators by
+Tab_DecayByTemp[t] / 256.
 
 @ 82B6
 Periodic temperature and battery check (Sub_CheckTempBattery), then the
@@ -56,7 +58,7 @@ continues with the low-battery follow-up, the commands posted by the
 receiver (Main_Commands), the job control and the print pipeline.
 
 @ 82DC
-Idle reset. While not printing, ActivityTimer (reloaded with 0xF3 by every
+Idle reset. While not busy, ActivityTimer (reloaded with 0xF3 by every
 received byte) counts up once per tick; when it wraps (13 ticks, about
 123-133 ms of silence) the printer clears exactly what Init clears: image
 memory pointers, image-full, unprocessed (unless jammed), packet error,
@@ -67,14 +69,17 @@ Counts StartDelay from 0xF4 up to 0 (12 ticks, about 123 ms): the pause
 before a job, or before the next copy, is allowed to start.
 
 @ 83AF
-Head-heat decay, once per tick while working: reads the temperature and
-multiplies each RowHeat accumulator by Tab_DecayByTemp[t] / 256.
+Head-heat decay while awake with no job: every 100 ticks (IdleDelay, loaded
+with 0x9C; about 1.02 s) reads the temperature and multiplies each RowHeat
+accumulator by Tab_DecayByTemp[t] / 256. Never runs during a job: IdleDelay
+is reloaded while a mechanism state is active.
 
 @ 8505
-Low-battery follow-up. Once a reply has carried the low-battery bit
-(RxFlags.LowBatReported) and LowBatTimer has run out, or when low battery
-is held while idle, clears P5.3 (the head-supply latch, SysFlags.SupplyCut).
-P5.3 is never set again.
+Low-battery follow-up. With low battery set, clears P5.3 (the head-supply
+latch, SysFlags.SupplyCut) once a reply has carried the bit
+(RxFlags.LowBatReported) and LowBatTimer has run out; or, if no reply has
+carried it, once LowBatHold is released and the link is silent
+(ActivityTimer = 0). P5.3 is never set again.
 
 @ 8529
 Cam-sensor watchdog while the motor runs: the cam sensor (P5.1) must change
@@ -119,12 +124,14 @@ cleared, deferred Init executed), next copy while Copies is not zero, and
 the start of a new job (Main_StartJob).
 
 @ 865C
-Starts the requested mechanism job unless an error is set (other error,
-paper jam): homing, print or feed.
+Starts the requested mechanism job unless an error is set (low battery,
+paper jam, other error): homing, print or feed.
 
 @ 8672
-Power-on homing request (MechRequests.ReqHoming): motor on, busy, state
-0x11 (Mech_State11_Homing).
+Power-on homing request (MechRequests.ReqHoming, set only by Reset): reads
+the battery at rest (BattAtStart) and sets JobFlags.BattSample, then motor
+on, busy, state 0x11 (Mech_State11_Homing), and a 21-tick TC1 run with the
+head lines off for the battery reading under load (Int_TC1_StrobeTick).
 
 @ 86AA
 Paper feed request (feed only, margin units in FeedLeft): motor on, busy,
@@ -136,10 +143,10 @@ the button is held).
 
 @ 86E0
 Starts a print. Checks the temperature (Job_TempError), computes HeatTime
-(Job_SetHeatTime), takes the battery reading at rest (BattAtStart), chooses
-the tick curves (cold head if every RowHeat is 0), primes the line buffer
-from SRAM and prepares the first column (Line_FirstColumn). Then motor on,
-busy, and the top margin (state 0x14) or the first band (state 0x12).
+(Job_SetHeatTime), chooses the tick curves (cold head if every RowHeat is
+0), primes the line buffer from SRAM and prepares the first column
+(Line_FirstColumn). Then motor on, busy, and the top margin (state 0x14) or
+the first band (state 0x12).
 
 @ 8712
 Temperature reading outside 0x35-0xD7: other error (status 0x40), no job.
@@ -153,9 +160,10 @@ Prepares the first pixel column of a job, the same chain as
 Line_NextColumnA/B written out once: copy the tile column
 (Line_CopyColumnSource), extract the 16 dots (Line_ExtractColumn),
 history codes (Line_ColumnHistory), energy codes (Line_ColumnEnergy), then
-for each row adds the dot's heat to RowHeat (Tab_HeatAddByCode,
-Tab_HeatAddFreshByTemp after a white dot, IdleCool for a white dot) and
-records the printed rows in DotMask.
+for each row adds the dot's heat to RowHeat: Tab_HeatAddByCode[code]; or
+Tab_HeatAddFreshByTemp for the first printed dot of the row in the band
+(DotMask bit clear) when the previous dot was white; or IdleCool when the
+table gives 0. Records the printed rows in DotMask.
 
 @ 8D7A
 Print pipeline, run every pass between strobe bursts: when the line buffer
@@ -244,9 +252,10 @@ The table reorders the tile bytes of a band into print order.
 @ AA7E
 TC1 interrupt, one strobe tick (TREG1A us). Writes the next byte pair of
 the current strobe table to P0/P1 (the 16 head dots). After 33 ticks it
-clears the ports and stops TC1. On the first burst of a job
-(JobFlags.BattSample) it reads the battery under load: low battery at or
-below 0x7E, or a sag of 8 below BattAtStart when at or below 0x9C.
+clears the ports and stops TC1. Once after power-on (JobFlags.BattSample,
+set by Job_StartHoming) it then reads the battery with the motor running:
+low battery at or below 0x7E, or a sag of 8 below BattAtStart when at or
+below 0x9C.
 
 @ AAC0
 TC3 interrupt, battery reading under load during a strobe burst: at or
@@ -321,8 +330,10 @@ State 0x16, paper feed for a print with 0 copies (FeedOnlyAmount units).
 State 0x17, paper feed while the front button is held.
 
 @ B328
-State 0x18, stop (low battery or Break): motor off, busy cleared, job
-ended.
+State 0x18, stop: low battery, Break, or the end of a print with no
+after-margin. Runs the motor to the cam home position, then motor off and
+state 0; unless a Break is pending, requests the next copy. Busy is cleared
+by the main loop (Main_JobControl).
 
 @ B369
 States 0x19-0x1E (never set): treated as an invalid state.
@@ -352,9 +363,9 @@ End of a packet: clears RxFlags.RxInPacket so the next byte starts a new
 packet.
 
 @ B3BF
-Bad first byte: if not printing, posts an Init (line noise while idle wipes
-the job); while printing, every packet until the job ends is treated as
-junk. Answers 0xFF to every byte until the inter-byte timeout ends the
+Bad first or second byte: if not printing, posts an Init (line noise while
+idle wipes the job); while busy, every packet until busy clears is treated
+as junk. Answers 0xFF to every byte until the inter-byte timeout ends the
 packet.
 
 @ B3E2
