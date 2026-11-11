@@ -764,7 +764,7 @@ Main_LinePipeline:
 L8D86:
         test (MechFlags).0   ; LineReady
         jrs T,L8D8C
-        jp L9793
+        jp Line_CheckColumnB
 L8D8C:
         ld HL,ColumnSource
         ld (HL),(DE)
@@ -2198,7 +2198,9 @@ L9780:
 L978E:
         set (MechFlags).0   ; LineReady
         jp Line_TileColumnDone
-L9793:
+
+Line_CheckColumnB:
+; [C] table A is prepared (LineReady): if LineFetch is clear copy the next tile column source and fall into Line_NextColumnB
         test (MechFlags).1   ; LineFetch
         jrs T,L9799
         jp Main_RefillLineBuf

@@ -10,7 +10,8 @@ addr,name,tag,note
 82DC,Main_IdleResetTimer,C,counts ActivityTimer while not busy; wrap = reset as Init
 8379,Main_StartDelay,C,"counts StartDelay (12 ticks, about 123 ms) before a job or the next copy starts"
 83AF,Heat_DecayTick,C,every 100 ticks with no job: RowHeat *= Tab_DecayByTemp[temperature] / 256
-8505,Main_LowBattery,C,"after low battery: once reported (and LowBatTimer expired) or held while idle, clear P5.3"
+8505,Main_ReloadDecayTimer,C,a tick with a job running or the slow tick: reload HeatDecayTimer (100 ticks to the next heat decay)
+8508,Main_LowBattery,C,"after low battery: once reported (and LowBatTimer expired) or held while idle, clear P5.3"
 8529,Main_CamWatchdog,C,jam if the cam sensor does not change within 13 steps (high) / 51 steps (low) of 8 encoder pulses
 8564,Main_Commands,C,run the commands posted by the receiver (CmdRequests)
 857B,Cmd_Init,C,"clear image memory, decoder, image-full, unprocessed (unless jammed), break block"
@@ -28,6 +29,7 @@ addr,name,tag,note
 8808,Line_FirstColumn,C,"job start: extract, history, energy codes and heat accumulation for the first column"
 8D7A,Main_LinePipeline,C,"between bursts: refill LineBuf from SRAM when empty, else copy the next tile column and prepare the next column"
 8E1C,Line_NextColumnA,I,"same chain as Line_FirstColumn, unrolled, for the next column (strobe tables A)"
+9793,Line_CheckColumnB,C,table A is prepared (LineReady): if LineFetch is clear copy the next tile column source and fall into Line_NextColumnB
 9829,Line_NextColumnB,I,same chain for the strobe tables B
 A19D,Line_TileColumnDone,C,"after 8 pixel columns: next tile column; after 20, a new band"
 A1A4,Heat_BandStart,C,"new band: clear RowHistory, RowHeat -= Tab_BandCoolByTemp[temperature]"
@@ -96,6 +98,8 @@ B869,Rx_SkipWithError,C,packet error; sum and drop the payload
 B8B0,Rx_DataTooLong,C,length >= 0x400
 B8BC,Rx_DataWhileBusy,C,
 B8BE,Rx_IgnorePayload,C,ignored packet: payload summed (or skipped while busy)
+B8D1,Rx_SumPayload,C,sums and drops the remaining payload bytes then goes to Rx_Checksum
+B916,Rx_SkipWhileBusy,C,busy: payload and checksum bytes are read without summing or compare; then the reply
 B984,Sub_BitReverse_Unused,C,unreferenced: A = bit-reversed A (the receiver inlines the same code); dead
 B99E,Int_TC4_ByteTimeout,C,"no byte for 5.12 ms: abort the packet, roll back data"
 B9B4,Rx_WaitByte,C,save the return address in RxResume and leave the interrupt
@@ -136,6 +140,14 @@ C922,StrobeB_Row12,C,set P1.4 (band row 12) in strobe table B for the dot's tick
 C981,StrobeB_Row13,C,set P1.5 (band row 13) in strobe table B for the dot's tick count
 C9E0,StrobeB_Row14,C,set P1.6 (band row 14) in strobe table B for the dot's tick count
 CA3F,StrobeB_Row15,C,set P1.7 (band row 15) in strobe table B for the dot's tick count
+CA9E,Strobe_SetBit0,C,ladder of set (HL+).0: entered at the step for the tick count; turns bit 0 on in that many consecutive strobe-table bytes; ret
+CAE1,Strobe_SetBit1,C,ladder of set (HL+).1: entered at the step for the tick count; turns bit 1 on in that many consecutive strobe-table bytes; ret
+CB24,Strobe_SetBit2,C,ladder of set (HL+).2: entered at the step for the tick count; turns bit 2 on in that many consecutive strobe-table bytes; ret
+CB67,Strobe_SetBit3,C,ladder of set (HL+).3: entered at the step for the tick count; turns bit 3 on in that many consecutive strobe-table bytes; ret
+CBAA,Strobe_SetBit4,C,ladder of set (HL+).4: entered at the step for the tick count; turns bit 4 on in that many consecutive strobe-table bytes; ret
+CBED,Strobe_SetBit5,C,ladder of set (HL+).5: entered at the step for the tick count; turns bit 5 on in that many consecutive strobe-table bytes; ret
+CC30,Strobe_SetBit6,C,ladder of set (HL+).6: entered at the step for the tick count; turns bit 6 on in that many consecutive strobe-table bytes; ret
+CC73,Strobe_SetBit7,C,ladder of set (HL+).7: entered at the step for the tick count; turns bit 7 on in that many consecutive strobe-table bytes; ret
 CCB6,Tab_EnergyByHistory,C,"energy code by (previous dot, current dot), index prev*16+cur: white 0; black after white 0x6B, after black 0x4A"
 CCF6,Tab_DotTicks,C,"256 pairs (first tick, tick count) by energy code: the dot's on-window inside the 33-tick burst"
 CEF6,Tab_HeatBaseByTemp,C,256 bytes: strobe base time by temperature reading

@@ -49,7 +49,7 @@ L803B:
         ld (RingRd),HL
         ld HL,LowBatHoldTimer
         ld (HL),$6D
-        ld (IdleDelay),$9C
+        ld (HeatDecayTimer),$9C
         ld (StartDelay),$01
         ld (EncoderTimeout),$F4
         ld HL,EncoderIdleCount

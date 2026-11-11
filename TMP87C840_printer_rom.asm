@@ -149,7 +149,7 @@ EncoderTimeout   equ $00F3   ; [C] 1 byte(s). ticks without an encoder pulse (ja
 CamTimeout       equ $00F4   ; [C] 1 byte(s). steps of 8 encoder pulses without a cam sensor change (jam at overflow)
 SelfTest         equ $00F5   ; [C] 1 byte(s). 1 = self-test requested at power-on
 StartDelay       equ $00F6   ; [C] 1 byte(s). delay before a job or the next copy: 0xF4 -> 0 (12 ticks)
-IdleDelay        equ $00F7   ; [I] 1 byte(s). counts 100 ticks (from 0x9C) with no job between two head-heat decay steps
+HeatDecayTimer   equ $00F7   ; [C] 1 byte(s). counts 100 ticks (from 0x9C) with no job between two head-heat decay steps
 TileColumnsLeft  equ $00F8   ; [C] 1 byte(s). tile columns left in the band (20 per band)
 IdleCool         equ $00F9   ; [C] 1 byte(s). Tab_IdleCoolByTemp value for the current temperature
 DotMask          equ $00FA   ; [C] 2 byte(s). 16 bits: rows with a printed dot in this column
@@ -229,7 +229,7 @@ L803B:
   8055  f0de13     ld (RingRd),HL
   8058  171d04     ld HL,LowBatHoldTimer
   805B  2d6d       ld (HL),$6D
-  805D  2cf79c     ld (IdleDelay),$9C
+  805D  2cf79c     ld (HeatDecayTimer),$9C
   8060  2cf601     ld (StartDelay),$01
   8063  2cf3f4     ld (EncoderTimeout),$F4
   8066  171804     ld HL,EncoderIdleCount
@@ -371,7 +371,7 @@ Main_EnterIdle:
   8133  2c1524     ld (TC2CR),$24
   8136  171d04     ld HL,LowBatHoldTimer
   8139  2d6d       ld (HL),$6D
-  813B  2cf79c     ld (IdleDelay),$9C
+  813B  2cf79c     ld (HeatDecayTimer),$9C
   813E  4fe0       clr (DecodeFlags).7   ; Tick
   8140  4439       set (SYSCR2).4
   8142  4271       set (SysFlags).2   ; TickRunning
@@ -591,7 +591,7 @@ L82CD:
 Main_Tick:
   82D0  4fe0       clr (DecodeFlags).7   ; Tick
   82D2  a2         jrs F,L82D6
-  82D3  fe0885     jp L8508
+  82D3  fe0885     jp Main_LowBattery
 L82D6:
   82D6  22e8       ld A,(LowBatTimer)
   82D8  d002       jr Z,Main_IdleResetTimer
@@ -700,11 +700,11 @@ Main_StartDelay:
 L8384:
   8384  da71       test (SysFlags).2   ; TickRunning
   8386  a2         jrs F,L838A
-  8387  fe0585     jp Main_LowBattery
+  8387  fe0585     jp Main_ReloadDecayTimer
 L838A:
   838A  2273       ld A,(MechState)
   838C  d003       jr Z,L8391
-  838E  fe0585     jp Main_LowBattery
+  838E  fe0585     jp Main_ReloadDecayTimer
 L8391:
   8391  d87c       test (Status).0   ; StLowBattery
   8393  8a         jrs T,L839F
@@ -715,21 +715,21 @@ L8391:
   839C  a1         jrs F,L839F
   839D  49d9       clr (RxFlags).1   ; LowBatHold
 L839F:
-  839F  20f7       inc (IdleDelay)
+  839F  20f7       inc (HeatDecayTimer)
   83A1  82         jrs T,L83A5
-  83A2  fe0885     jp L8508
+  83A2  fe0885     jp Main_LowBattery
 L83A5:
   83A5  171e04     ld HL,HeatSoak
   83A8  2f         clr (HL)
   83A9  dfe1       test (JobFlags).7   ; BattSample
   83AB  82         jrs T,Heat_DecayTick
-  83AC  fe0585     jp Main_LowBattery
+  83AC  fe0585     jp Main_ReloadDecayTimer
 
 ;==============================================================================
 ; Heat_DecayTick  [C]
-;   Head-heat decay while awake with no job: every 100 ticks (IdleDelay, loaded
+;   Head-heat decay while awake with no job: every 100 ticks (HeatDecayTimer, loaded
 ;   with 0x9C; about 1.02 s) reads the temperature and multiplies each RowHeat
-;   accumulator by Tab_DecayByTemp[t] / 256. Never runs during a job: IdleDelay
+;   accumulator by Tab_DecayByTemp[t] / 256. Never runs during a job: HeatDecayTimer
 ;   is reloaded while a mechanism state is active.
 ;==============================================================================
 Heat_DecayTick:
@@ -889,6 +889,10 @@ L83B4:
   84FF  e97000     addc W,$00
   8502  f0d510     ld ($D5),WA
 
+Main_ReloadDecayTimer:
+; [C] a tick with a job running or the slow tick: reload HeatDecayTimer (100 ticks to the next heat decay)
+  8505  2cf79c     ld (HeatDecayTimer),$9C
+
 ;==============================================================================
 ; Main_LowBattery  [C]
 ;   Low-battery follow-up. With low battery set, clears P5.3 (the head-supply
@@ -898,8 +902,6 @@ L83B4:
 ;   (ActivityTimer = 0). P5.3 is never set again.
 ;==============================================================================
 Main_LowBattery:
-  8505  2cf79c     ld (IdleDelay),$9C
-L8508:
   8508  d87c       test (Status).0   ; StLowBattery
   850A  a5         jrs F,L8511
   850B  49d9       clr (RxFlags).1   ; LowBatHold
@@ -2168,7 +2170,7 @@ Main_LinePipeline:
 L8D86:
   8D86  d870       test (MechFlags).0   ; LineReady
   8D88  82         jrs T,L8D8C
-  8D89  fe9397     jp L9793
+  8D89  fe9397     jp Line_CheckColumnB
 L8D8C:
   8D8C  174002     ld HL,ColumnSource
   8D8F  e227       ld (HL),(DE)
@@ -3602,7 +3604,9 @@ L9780:
 L978E:
   978E  4070       set (MechFlags).0   ; LineReady
   9790  fe9da1     jp Line_TileColumnDone
-L9793:
+
+Line_CheckColumnB:
+; [C] table A is prepared (LineReady): if LineFetch is clear copy the next tile column source and fall into Line_NextColumnB
   9793  d970       test (MechFlags).1   ; LineFetch
   9795  82         jrs T,L9799
   9796  fe9da2     jp Main_RefillLineBuf
@@ -7725,9 +7729,9 @@ LB8AC:
 Rx_DataTooLong:
   B8B0  17ec03     ld HL,PktCommand
   B8B3  e40158     ld A,(HL+1)
-  B8B6  d119       jr NZ,LB8D1
+  B8B6  d119       jr NZ,Rx_SumPayload
   B8B8  40da       set (RxErrFlags).0   ; PacketError
-  B8BA  fb15       jr LB8D1
+  B8BA  fb15       jr Rx_SumPayload
 
 ;==============================================================================
 ; Rx_DataWhileBusy  [C]
@@ -7744,13 +7748,15 @@ Rx_DataWhileBusy:
 Rx_IgnorePayload:
   B8BE  41da       set (RxErrFlags).1   ; RxIgnored
   B8C0  de7c       test (Status).6   ; StBusy
-  B8C2  d752       jr F,LB916
+  B8C2  d752       jr F,Rx_SkipWhileBusy
   B8C4  171604     ld HL,PktRemaining
   B8C7  e314       ld WA,(HL)
   B8C9  e83f0000   cmp WA,$0000
-  B8CD  a2         jrs F,LB8D1
+  B8CD  a2         jrs F,Rx_SumPayload
   B8CE  feefb5     jp Rx_Checksum
-LB8D1:
+
+Rx_SumPayload:
+; [C] sums and drops the remaining payload bytes then goes to Rx_Checksum
   B8D1  fcb4b9     call Rx_WaitByte
   B8D4  16f80f     ld DE,Sio2Buf
   B8D7  e258       ld A,(DE)
@@ -7787,8 +7793,10 @@ LB8D1:
   B90F  feefb5     jp Rx_Checksum
 LB912:
   B912  f310       ld (HL),WA
-  B914  fbbb       jr LB8D1
-LB916:
+  B914  fbbb       jr Rx_SumPayload
+
+Rx_SkipWhileBusy:
+; [C] busy: payload and checksum bytes are read without summing or compare; then the reply
   B916  171604     ld HL,PktRemaining
   B919  e314       ld WA,(HL)
   B91B  e83f0000   cmp WA,$0000
@@ -7892,7 +7900,7 @@ Int_TC4_ByteTimeout:
 ;   Waits for the next byte: saves the caller's return address in RxResume,
 ;   sets RxFlags.RxInPacket and leaves the interrupt. The next SIO2 interrupt
 ;   continues after the call.
-;   Called by: Rx_PacketStart, Rx_SyncLost, Rx_Header, Rx_DataPayload, Rx_Checksum, Rx_Reply, Rx_ReadArgs, Rx_SkipWithError, Rx_IgnorePayload
+;   Called by: Rx_PacketStart, Rx_SyncLost, Rx_Header, Rx_DataPayload, Rx_Checksum, Rx_Reply, Rx_ReadArgs, Rx_SkipWithError, Rx_SumPayload, Rx_SkipWhileBusy
 ;==============================================================================
 Rx_WaitByte:
   B9B4  40d9       set (RxFlags).0   ; RxInPacket
@@ -8731,7 +8739,7 @@ StrobeA_Row00:
   BF15  a4ca       dw JCAA4
   BF17  a2ca       dw JCAA2
   BF19  a0ca       dw JCAA0
-  BF1B  9eca       dw JCA9E
+  BF1B  9eca       dw Strobe_SetBit0
 
 StrobeA_Row01:
 ; [C] set P0.1 (band row 1) in strobe table A for the dot's tick count
@@ -8782,7 +8790,7 @@ StrobeA_Row01:
   BF74  e7ca       dw JCAE7
   BF76  e5ca       dw JCAE5
   BF78  e3ca       dw JCAE3
-  BF7A  e1ca       dw JCAE1
+  BF7A  e1ca       dw Strobe_SetBit1
 
 StrobeA_Row02:
 ; [C] set P0.2 (band row 2) in strobe table A for the dot's tick count
@@ -8833,7 +8841,7 @@ StrobeA_Row02:
   BFD3  2acb       dw JCB2A
   BFD5  28cb       dw JCB28
   BFD7  26cb       dw JCB26
-  BFD9  24cb       dw JCB24
+  BFD9  24cb       dw Strobe_SetBit2
 
 StrobeA_Row03:
 ; [C] set P0.3 (band row 3) in strobe table A for the dot's tick count
@@ -8884,7 +8892,7 @@ StrobeA_Row03:
   C032  6dcb       dw JCB6D
   C034  6bcb       dw JCB6B
   C036  69cb       dw JCB69
-  C038  67cb       dw JCB67
+  C038  67cb       dw Strobe_SetBit3
 
 StrobeA_Row04:
 ; [C] set P0.4 (band row 4) in strobe table A for the dot's tick count
@@ -8935,7 +8943,7 @@ StrobeA_Row04:
   C091  b0cb       dw JCBB0
   C093  aecb       dw JCBAE
   C095  accb       dw JCBAC
-  C097  aacb       dw JCBAA
+  C097  aacb       dw Strobe_SetBit4
 
 StrobeA_Row05:
 ; [C] set P0.5 (band row 5) in strobe table A for the dot's tick count
@@ -8986,7 +8994,7 @@ StrobeA_Row05:
   C0F0  f3cb       dw JCBF3
   C0F2  f1cb       dw JCBF1
   C0F4  efcb       dw JCBEF
-  C0F6  edcb       dw JCBED
+  C0F6  edcb       dw Strobe_SetBit5
 
 StrobeA_Row06:
 ; [C] set P0.6 (band row 6) in strobe table A for the dot's tick count
@@ -9037,7 +9045,7 @@ StrobeA_Row06:
   C14F  36cc       dw JCC36
   C151  34cc       dw JCC34
   C153  32cc       dw JCC32
-  C155  30cc       dw JCC30
+  C155  30cc       dw Strobe_SetBit6
 
 StrobeA_Row07:
 ; [C] set P0.7 (band row 7) in strobe table A for the dot's tick count
@@ -9088,7 +9096,7 @@ StrobeA_Row07:
   C1AE  79cc       dw JCC79
   C1B0  77cc       dw JCC77
   C1B2  75cc       dw JCC75
-  C1B4  73cc       dw JCC73
+  C1B4  73cc       dw Strobe_SetBit7
 
 StrobeA_Row08:
 ; [C] set P1.0 (band row 8) in strobe table A for the dot's tick count
@@ -9139,7 +9147,7 @@ StrobeA_Row08:
   C20D  a4ca       dw JCAA4
   C20F  a2ca       dw JCAA2
   C211  a0ca       dw JCAA0
-  C213  9eca       dw JCA9E
+  C213  9eca       dw Strobe_SetBit0
 
 StrobeA_Row09:
 ; [C] set P1.1 (band row 9) in strobe table A for the dot's tick count
@@ -9190,7 +9198,7 @@ StrobeA_Row09:
   C26C  e7ca       dw JCAE7
   C26E  e5ca       dw JCAE5
   C270  e3ca       dw JCAE3
-  C272  e1ca       dw JCAE1
+  C272  e1ca       dw Strobe_SetBit1
 
 StrobeA_Row10:
 ; [C] set P1.2 (band row 10) in strobe table A for the dot's tick count
@@ -9241,7 +9249,7 @@ StrobeA_Row10:
   C2CB  2acb       dw JCB2A
   C2CD  28cb       dw JCB28
   C2CF  26cb       dw JCB26
-  C2D1  24cb       dw JCB24
+  C2D1  24cb       dw Strobe_SetBit2
 
 StrobeA_Row11:
 ; [C] set P1.3 (band row 11) in strobe table A for the dot's tick count
@@ -9292,7 +9300,7 @@ StrobeA_Row11:
   C32A  6dcb       dw JCB6D
   C32C  6bcb       dw JCB6B
   C32E  69cb       dw JCB69
-  C330  67cb       dw JCB67
+  C330  67cb       dw Strobe_SetBit3
 
 StrobeA_Row12:
 ; [C] set P1.4 (band row 12) in strobe table A for the dot's tick count
@@ -9343,7 +9351,7 @@ StrobeA_Row12:
   C389  b0cb       dw JCBB0
   C38B  aecb       dw JCBAE
   C38D  accb       dw JCBAC
-  C38F  aacb       dw JCBAA
+  C38F  aacb       dw Strobe_SetBit4
 
 StrobeA_Row13:
 ; [C] set P1.5 (band row 13) in strobe table A for the dot's tick count
@@ -9394,7 +9402,7 @@ StrobeA_Row13:
   C3E8  f3cb       dw JCBF3
   C3EA  f1cb       dw JCBF1
   C3EC  efcb       dw JCBEF
-  C3EE  edcb       dw JCBED
+  C3EE  edcb       dw Strobe_SetBit5
 
 StrobeA_Row14:
 ; [C] set P1.6 (band row 14) in strobe table A for the dot's tick count
@@ -9445,7 +9453,7 @@ StrobeA_Row14:
   C447  36cc       dw JCC36
   C449  34cc       dw JCC34
   C44B  32cc       dw JCC32
-  C44D  30cc       dw JCC30
+  C44D  30cc       dw Strobe_SetBit6
 
 StrobeA_Row15:
 ; [C] set P1.7 (band row 15) in strobe table A for the dot's tick count
@@ -9496,7 +9504,7 @@ StrobeA_Row15:
   C4A6  79cc       dw JCC79
   C4A8  77cc       dw JCC77
   C4AA  75cc       dw JCC75
-  C4AC  73cc       dw JCC73
+  C4AC  73cc       dw Strobe_SetBit7
 
 StrobeB_Row00:
 ; [C] set P0.0 (band row 0) in strobe table B for the dot's tick count
@@ -9547,7 +9555,7 @@ StrobeB_Row00:
   C505  a4ca       dw JCAA4
   C507  a2ca       dw JCAA2
   C509  a0ca       dw JCAA0
-  C50B  9eca       dw JCA9E
+  C50B  9eca       dw Strobe_SetBit0
 
 StrobeB_Row01:
 ; [C] set P0.1 (band row 1) in strobe table B for the dot's tick count
@@ -9598,7 +9606,7 @@ StrobeB_Row01:
   C564  e7ca       dw JCAE7
   C566  e5ca       dw JCAE5
   C568  e3ca       dw JCAE3
-  C56A  e1ca       dw JCAE1
+  C56A  e1ca       dw Strobe_SetBit1
 
 StrobeB_Row02:
 ; [C] set P0.2 (band row 2) in strobe table B for the dot's tick count
@@ -9649,7 +9657,7 @@ StrobeB_Row02:
   C5C3  2acb       dw JCB2A
   C5C5  28cb       dw JCB28
   C5C7  26cb       dw JCB26
-  C5C9  24cb       dw JCB24
+  C5C9  24cb       dw Strobe_SetBit2
 
 StrobeB_Row03:
 ; [C] set P0.3 (band row 3) in strobe table B for the dot's tick count
@@ -9700,7 +9708,7 @@ StrobeB_Row03:
   C622  6dcb       dw JCB6D
   C624  6bcb       dw JCB6B
   C626  69cb       dw JCB69
-  C628  67cb       dw JCB67
+  C628  67cb       dw Strobe_SetBit3
 
 StrobeB_Row04:
 ; [C] set P0.4 (band row 4) in strobe table B for the dot's tick count
@@ -9751,7 +9759,7 @@ StrobeB_Row04:
   C681  b0cb       dw JCBB0
   C683  aecb       dw JCBAE
   C685  accb       dw JCBAC
-  C687  aacb       dw JCBAA
+  C687  aacb       dw Strobe_SetBit4
 
 StrobeB_Row05:
 ; [C] set P0.5 (band row 5) in strobe table B for the dot's tick count
@@ -9802,7 +9810,7 @@ StrobeB_Row05:
   C6E0  f3cb       dw JCBF3
   C6E2  f1cb       dw JCBF1
   C6E4  efcb       dw JCBEF
-  C6E6  edcb       dw JCBED
+  C6E6  edcb       dw Strobe_SetBit5
 
 StrobeB_Row06:
 ; [C] set P0.6 (band row 6) in strobe table B for the dot's tick count
@@ -9853,7 +9861,7 @@ StrobeB_Row06:
   C73F  36cc       dw JCC36
   C741  34cc       dw JCC34
   C743  32cc       dw JCC32
-  C745  30cc       dw JCC30
+  C745  30cc       dw Strobe_SetBit6
 
 StrobeB_Row07:
 ; [C] set P0.7 (band row 7) in strobe table B for the dot's tick count
@@ -9904,7 +9912,7 @@ StrobeB_Row07:
   C79E  79cc       dw JCC79
   C7A0  77cc       dw JCC77
   C7A2  75cc       dw JCC75
-  C7A4  73cc       dw JCC73
+  C7A4  73cc       dw Strobe_SetBit7
 
 StrobeB_Row08:
 ; [C] set P1.0 (band row 8) in strobe table B for the dot's tick count
@@ -9955,7 +9963,7 @@ StrobeB_Row08:
   C7FD  a4ca       dw JCAA4
   C7FF  a2ca       dw JCAA2
   C801  a0ca       dw JCAA0
-  C803  9eca       dw JCA9E
+  C803  9eca       dw Strobe_SetBit0
 
 StrobeB_Row09:
 ; [C] set P1.1 (band row 9) in strobe table B for the dot's tick count
@@ -10006,7 +10014,7 @@ StrobeB_Row09:
   C85C  e7ca       dw JCAE7
   C85E  e5ca       dw JCAE5
   C860  e3ca       dw JCAE3
-  C862  e1ca       dw JCAE1
+  C862  e1ca       dw Strobe_SetBit1
 
 StrobeB_Row10:
 ; [C] set P1.2 (band row 10) in strobe table B for the dot's tick count
@@ -10057,7 +10065,7 @@ StrobeB_Row10:
   C8BB  2acb       dw JCB2A
   C8BD  28cb       dw JCB28
   C8BF  26cb       dw JCB26
-  C8C1  24cb       dw JCB24
+  C8C1  24cb       dw Strobe_SetBit2
 
 StrobeB_Row11:
 ; [C] set P1.3 (band row 11) in strobe table B for the dot's tick count
@@ -10108,7 +10116,7 @@ StrobeB_Row11:
   C91A  6dcb       dw JCB6D
   C91C  6bcb       dw JCB6B
   C91E  69cb       dw JCB69
-  C920  67cb       dw JCB67
+  C920  67cb       dw Strobe_SetBit3
 
 StrobeB_Row12:
 ; [C] set P1.4 (band row 12) in strobe table B for the dot's tick count
@@ -10159,7 +10167,7 @@ StrobeB_Row12:
   C979  b0cb       dw JCBB0
   C97B  aecb       dw JCBAE
   C97D  accb       dw JCBAC
-  C97F  aacb       dw JCBAA
+  C97F  aacb       dw Strobe_SetBit4
 
 StrobeB_Row13:
 ; [C] set P1.5 (band row 13) in strobe table B for the dot's tick count
@@ -10210,7 +10218,7 @@ StrobeB_Row13:
   C9D8  f3cb       dw JCBF3
   C9DA  f1cb       dw JCBF1
   C9DC  efcb       dw JCBEF
-  C9DE  edcb       dw JCBED
+  C9DE  edcb       dw Strobe_SetBit5
 
 StrobeB_Row14:
 ; [C] set P1.6 (band row 14) in strobe table B for the dot's tick count
@@ -10261,7 +10269,7 @@ StrobeB_Row14:
   CA37  36cc       dw JCC36
   CA39  34cc       dw JCC34
   CA3B  32cc       dw JCC32
-  CA3D  30cc       dw JCC30
+  CA3D  30cc       dw Strobe_SetBit6
 
 StrobeB_Row15:
 ; [C] set P1.7 (band row 15) in strobe table B for the dot's tick count
@@ -10312,8 +10320,10 @@ StrobeB_Row15:
   CA96  79cc       dw JCC79
   CA98  77cc       dw JCC77
   CA9A  75cc       dw JCC75
-  CA9C  73cc       dw JCC73
-JCA9E:
+  CA9C  73cc       dw Strobe_SetBit7
+
+Strobe_SetBit0:
+; [C] ladder of set (HL+).0: entered at the step for the tick count; turns bit 0 on in that many consecutive strobe-table bytes; ret
   CA9E  e640       set (HL+).0
 JCAA0:
   CAA0  e640       set (HL+).0
@@ -10381,7 +10391,9 @@ JCADE:
   CADE  e640       set (HL+).0
 JCAE0:
   CAE0  05         ret
-JCAE1:
+
+Strobe_SetBit1:
+; [C] ladder of set (HL+).1: entered at the step for the tick count; turns bit 1 on in that many consecutive strobe-table bytes; ret
   CAE1  e641       set (HL+).1
 JCAE3:
   CAE3  e641       set (HL+).1
@@ -10449,7 +10461,9 @@ JCB21:
   CB21  e641       set (HL+).1
 JCB23:
   CB23  05         ret
-JCB24:
+
+Strobe_SetBit2:
+; [C] ladder of set (HL+).2: entered at the step for the tick count; turns bit 2 on in that many consecutive strobe-table bytes; ret
   CB24  e642       set (HL+).2
 JCB26:
   CB26  e642       set (HL+).2
@@ -10517,7 +10531,9 @@ JCB64:
   CB64  e642       set (HL+).2
 JCB66:
   CB66  05         ret
-JCB67:
+
+Strobe_SetBit3:
+; [C] ladder of set (HL+).3: entered at the step for the tick count; turns bit 3 on in that many consecutive strobe-table bytes; ret
   CB67  e643       set (HL+).3
 JCB69:
   CB69  e643       set (HL+).3
@@ -10585,7 +10601,9 @@ JCBA7:
   CBA7  e643       set (HL+).3
 JCBA9:
   CBA9  05         ret
-JCBAA:
+
+Strobe_SetBit4:
+; [C] ladder of set (HL+).4: entered at the step for the tick count; turns bit 4 on in that many consecutive strobe-table bytes; ret
   CBAA  e644       set (HL+).4
 JCBAC:
   CBAC  e644       set (HL+).4
@@ -10653,7 +10671,9 @@ JCBEA:
   CBEA  e644       set (HL+).4
 JCBEC:
   CBEC  05         ret
-JCBED:
+
+Strobe_SetBit5:
+; [C] ladder of set (HL+).5: entered at the step for the tick count; turns bit 5 on in that many consecutive strobe-table bytes; ret
   CBED  e645       set (HL+).5
 JCBEF:
   CBEF  e645       set (HL+).5
@@ -10721,7 +10741,9 @@ JCC2D:
   CC2D  e645       set (HL+).5
 JCC2F:
   CC2F  05         ret
-JCC30:
+
+Strobe_SetBit6:
+; [C] ladder of set (HL+).6: entered at the step for the tick count; turns bit 6 on in that many consecutive strobe-table bytes; ret
   CC30  e646       set (HL+).6
 JCC32:
   CC32  e646       set (HL+).6
@@ -10789,7 +10811,9 @@ JCC70:
   CC70  e646       set (HL+).6
 JCC72:
   CC72  05         ret
-JCC73:
+
+Strobe_SetBit7:
+; [C] ladder of set (HL+).7: entered at the step for the tick count; turns bit 7 on in that many consecutive strobe-table bytes; ret
   CC73  e647       set (HL+).7
 JCC75:
   CC75  e647       set (HL+).7

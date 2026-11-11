@@ -55,10 +55,10 @@ Only Python 3 is needed (`make` is optional: `python3 tools/t870asm.py src/main.
 | L0 listing reassembles to the same md5 | done: `tools/t870asm.py` assembles the instruction and data text of the listing (ignoring the hex column, computing every address itself) to md5 `aa393ec87ccb4220200255ab5adf8ac9`; the build checks it every time |
 | L1 every byte typed | done: code 16,220 B, jump tables 2,238 B, tables 6,263 B (3,883 B byte tables + 2,380 B word tables), fill 8,047 B |
 | L2 code traced and run | done: all indirect jumps resolved; 88 % of the code bytes run in the emulator, nothing runs outside the trace (measured during the work; the coverage script is not in the repository) |
-| L3 names | 160 ROM names, 77 RAM variables, 61 flag bits, 37 registers: 286 tagged C, 12 I, 0 ?; 898 short branch targets keep automatic labels |
+| L3 names | 172 ROM names, 77 RAM variables, 61 flag bits, 37 registers: 299 tagged C, 11 I, 0 ?; 886 short branch targets keep automatic labels |
 | L4 RAM and registers in the source | done: every RAM variable, flag bit and register the code uses is named in the listing; elements inside named buffers are still written as raw addresses (`($B8)` is `RowHeat+1`) |
 | L5 buildable tree | done: `src/` (10 modules, 2 include files, 14 binary tables) builds with `make`, and `make check` gives the ROM md5. All ROM addresses are symbolic; code inserted in three modules still gives a working firmware in the emulator (`emulator/relocation_test.py`) |
-| L6 understanding | protocol verified in the emulator; strobe timing matches a real printer for black and dark grey (within 1 %; light grey is 10 % short); the head energy model (per-dot history, per-element heat, tick curves) and every table decoded; 12 inferred names left (`symbols/README.md`) |
+| L6 understanding | protocol verified in the emulator; strobe timing matches a real printer for black and dark grey (within 1 %; light grey is 10 % short); the head energy model (per-dot history, per-element heat, tick curves) and every table decoded; 11 inferred names left (`symbols/README.md`) |
 
 ## Sources
 

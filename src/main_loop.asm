@@ -81,7 +81,7 @@ Main_EnterIdle:
         ld (TC2CR),$24
         ld HL,LowBatHoldTimer
         ld (HL),$6D
-        ld (IdleDelay),$9C
+        ld (HeatDecayTimer),$9C
         clr (DecodeFlags).7   ; Tick
         set (SYSCR2).4
         set (SysFlags).2   ; TickRunning
@@ -301,7 +301,7 @@ L82CD:
 Main_Tick:
         clr (DecodeFlags).7   ; Tick
         jrs F,L82D6
-        jp L8508
+        jp Main_LowBattery
 L82D6:
         ld A,(LowBatTimer)
         jr Z,Main_IdleResetTimer
@@ -410,11 +410,11 @@ Main_StartDelay:
 L8384:
         test (SysFlags).2   ; TickRunning
         jrs F,L838A
-        jp Main_LowBattery
+        jp Main_ReloadDecayTimer
 L838A:
         ld A,(MechState)
         jr Z,L8391
-        jp Main_LowBattery
+        jp Main_ReloadDecayTimer
 L8391:
         test (Status).0   ; StLowBattery
         jrs T,L839F
@@ -425,21 +425,21 @@ L8391:
         jrs F,L839F
         clr (RxFlags).1   ; LowBatHold
 L839F:
-        inc (IdleDelay)
+        inc (HeatDecayTimer)
         jrs T,L83A5
-        jp L8508
+        jp Main_LowBattery
 L83A5:
         ld HL,HeatSoak
         clr (HL)
         test (JobFlags).7   ; BattSample
         jrs T,Heat_DecayTick
-        jp Main_LowBattery
+        jp Main_ReloadDecayTimer
 
 ;==============================================================================
 ; Heat_DecayTick  [C]
-;   Head-heat decay while awake with no job: every 100 ticks (IdleDelay, loaded
+;   Head-heat decay while awake with no job: every 100 ticks (HeatDecayTimer, loaded
 ;   with 0x9C; about 1.02 s) reads the temperature and multiplies each RowHeat
-;   accumulator by Tab_DecayByTemp[t] / 256. Never runs during a job: IdleDelay
+;   accumulator by Tab_DecayByTemp[t] / 256. Never runs during a job: HeatDecayTimer
 ;   is reloaded while a mechanism state is active.
 ;==============================================================================
 Heat_DecayTick:
@@ -599,6 +599,10 @@ L83B4:
         addc W,$00
         ld ($D5),WA
 
+Main_ReloadDecayTimer:
+; [C] a tick with a job running or the slow tick: reload HeatDecayTimer (100 ticks to the next heat decay)
+        ld (HeatDecayTimer),$9C
+
 ;==============================================================================
 ; Main_LowBattery  [C]
 ;   Low-battery follow-up. With low battery set, clears P5.3 (the head-supply
@@ -608,8 +612,6 @@ L83B4:
 ;   (ActivityTimer = 0). P5.3 is never set again.
 ;==============================================================================
 Main_LowBattery:
-        ld (IdleDelay),$9C
-L8508:
         test (Status).0   ; StLowBattery
         jrs F,L8511
         clr (RxFlags).1   ; LowBatHold

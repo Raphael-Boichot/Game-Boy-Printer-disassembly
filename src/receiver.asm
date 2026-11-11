@@ -823,9 +823,9 @@ LB8AC:
 Rx_DataTooLong:
         ld HL,PktCommand
         ld A,(HL+1)
-        jr NZ,LB8D1
+        jr NZ,Rx_SumPayload
         set (RxErrFlags).0   ; PacketError
-        jr LB8D1
+        jr Rx_SumPayload
 
 ;==============================================================================
 ; Rx_DataWhileBusy  [C]
@@ -842,13 +842,15 @@ Rx_DataWhileBusy:
 Rx_IgnorePayload:
         set (RxErrFlags).1   ; RxIgnored
         test (Status).6   ; StBusy
-        jr F,LB916
+        jr F,Rx_SkipWhileBusy
         ld HL,PktRemaining
         ld WA,(HL)
         cmp WA,$0000
-        jrs F,LB8D1
+        jrs F,Rx_SumPayload
         jp Rx_Checksum
-LB8D1:
+
+Rx_SumPayload:
+; [C] sums and drops the remaining payload bytes then goes to Rx_Checksum
         call Rx_WaitByte
         ld DE,Sio2Buf
         ld A,(DE)
@@ -885,8 +887,10 @@ LB8D1:
         jp Rx_Checksum
 LB912:
         ld (HL),WA
-        jr LB8D1
-LB916:
+        jr Rx_SumPayload
+
+Rx_SkipWhileBusy:
+; [C] busy: payload and checksum bytes are read without summing or compare; then the reply
         ld HL,PktRemaining
         ld WA,(HL)
         cmp WA,$0000
@@ -990,7 +994,7 @@ Int_TC4_ByteTimeout:
 ;   Waits for the next byte: saves the caller's return address in RxResume,
 ;   sets RxFlags.RxInPacket and leaves the interrupt. The next SIO2 interrupt
 ;   continues after the call.
-;   Called by: Rx_PacketStart, Rx_SyncLost, Rx_Header, Rx_DataPayload, Rx_Checksum, Rx_Reply, Rx_ReadArgs, Rx_SkipWithError, Rx_IgnorePayload
+;   Called by: Rx_PacketStart, Rx_SyncLost, Rx_Header, Rx_DataPayload, Rx_Checksum, Rx_Reply, Rx_ReadArgs, Rx_SkipWithError, Rx_SumPayload, Rx_SkipWhileBusy
 ;==============================================================================
 Rx_WaitByte:
         set (RxFlags).0   ; RxInPacket

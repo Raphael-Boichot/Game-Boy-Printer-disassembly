@@ -109,7 +109,7 @@ EncoderTimeout   equ $00F3   ; [C] 1 byte(s). ticks without an encoder pulse (ja
 CamTimeout       equ $00F4   ; [C] 1 byte(s). steps of 8 encoder pulses without a cam sensor change (jam at overflow)
 SelfTest         equ $00F5   ; [C] 1 byte(s). 1 = self-test requested at power-on
 StartDelay       equ $00F6   ; [C] 1 byte(s). delay before a job or the next copy: 0xF4 -> 0 (12 ticks)
-IdleDelay        equ $00F7   ; [I] 1 byte(s). counts 100 ticks (from 0x9C) with no job between two head-heat decay steps
+HeatDecayTimer   equ $00F7   ; [C] 1 byte(s). counts 100 ticks (from 0x9C) with no job between two head-heat decay steps
 TileColumnsLeft  equ $00F8   ; [C] 1 byte(s). tile columns left in the band (20 per band)
 IdleCool         equ $00F9   ; [C] 1 byte(s). Tab_IdleCoolByTemp value for the current temperature
 DotMask          equ $00FA   ; [C] 2 byte(s). 16 bits: rows with a printed dot in this column

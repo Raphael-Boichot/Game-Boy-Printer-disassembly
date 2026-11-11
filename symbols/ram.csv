@@ -47,7 +47,7 @@ addr,size,name,tag,desc
 00F4,1,CamTimeout,C,steps of 8 encoder pulses without a cam sensor change (jam at overflow)
 00F5,1,SelfTest,C,1 = self-test requested at power-on
 00F6,1,StartDelay,C,delay before a job or the next copy: 0xF4 -> 0 (12 ticks)
-00F7,1,IdleDelay,I,counts 100 ticks (from 0x9C) with no job between two head-heat decay steps
+00F7,1,HeatDecayTimer,C,counts 100 ticks (from 0x9C) with no job between two head-heat decay steps
 00F8,1,TileColumnsLeft,C,tile columns left in the band (20 per band)
 00F9,1,IdleCool,C,Tab_IdleCoolByTemp value for the current temperature
 00FA,2,DotMask,C,16 bits: rows with a printed dot in this column

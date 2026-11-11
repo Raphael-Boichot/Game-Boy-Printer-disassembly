@@ -830,7 +830,7 @@ StrobeA_Row00:
         dw JCAA4
         dw JCAA2
         dw JCAA0
-        dw JCA9E
+        dw Strobe_SetBit0
 
 StrobeA_Row01:
 ; [C] set P0.1 (band row 1) in strobe table A for the dot's tick count
@@ -881,7 +881,7 @@ StrobeA_Row01:
         dw JCAE7
         dw JCAE5
         dw JCAE3
-        dw JCAE1
+        dw Strobe_SetBit1
 
 StrobeA_Row02:
 ; [C] set P0.2 (band row 2) in strobe table A for the dot's tick count
@@ -932,7 +932,7 @@ StrobeA_Row02:
         dw JCB2A
         dw JCB28
         dw JCB26
-        dw JCB24
+        dw Strobe_SetBit2
 
 StrobeA_Row03:
 ; [C] set P0.3 (band row 3) in strobe table A for the dot's tick count
@@ -983,7 +983,7 @@ StrobeA_Row03:
         dw JCB6D
         dw JCB6B
         dw JCB69
-        dw JCB67
+        dw Strobe_SetBit3
 
 StrobeA_Row04:
 ; [C] set P0.4 (band row 4) in strobe table A for the dot's tick count
@@ -1034,7 +1034,7 @@ StrobeA_Row04:
         dw JCBB0
         dw JCBAE
         dw JCBAC
-        dw JCBAA
+        dw Strobe_SetBit4
 
 StrobeA_Row05:
 ; [C] set P0.5 (band row 5) in strobe table A for the dot's tick count
@@ -1085,7 +1085,7 @@ StrobeA_Row05:
         dw JCBF3
         dw JCBF1
         dw JCBEF
-        dw JCBED
+        dw Strobe_SetBit5
 
 StrobeA_Row06:
 ; [C] set P0.6 (band row 6) in strobe table A for the dot's tick count
@@ -1136,7 +1136,7 @@ StrobeA_Row06:
         dw JCC36
         dw JCC34
         dw JCC32
-        dw JCC30
+        dw Strobe_SetBit6
 
 StrobeA_Row07:
 ; [C] set P0.7 (band row 7) in strobe table A for the dot's tick count
@@ -1187,7 +1187,7 @@ StrobeA_Row07:
         dw JCC79
         dw JCC77
         dw JCC75
-        dw JCC73
+        dw Strobe_SetBit7
 
 StrobeA_Row08:
 ; [C] set P1.0 (band row 8) in strobe table A for the dot's tick count
@@ -1238,7 +1238,7 @@ StrobeA_Row08:
         dw JCAA4
         dw JCAA2
         dw JCAA0
-        dw JCA9E
+        dw Strobe_SetBit0
 
 StrobeA_Row09:
 ; [C] set P1.1 (band row 9) in strobe table A for the dot's tick count
@@ -1289,7 +1289,7 @@ StrobeA_Row09:
         dw JCAE7
         dw JCAE5
         dw JCAE3
-        dw JCAE1
+        dw Strobe_SetBit1
 
 StrobeA_Row10:
 ; [C] set P1.2 (band row 10) in strobe table A for the dot's tick count
@@ -1340,7 +1340,7 @@ StrobeA_Row10:
         dw JCB2A
         dw JCB28
         dw JCB26
-        dw JCB24
+        dw Strobe_SetBit2
 
 StrobeA_Row11:
 ; [C] set P1.3 (band row 11) in strobe table A for the dot's tick count
@@ -1391,7 +1391,7 @@ StrobeA_Row11:
         dw JCB6D
         dw JCB6B
         dw JCB69
-        dw JCB67
+        dw Strobe_SetBit3
 
 StrobeA_Row12:
 ; [C] set P1.4 (band row 12) in strobe table A for the dot's tick count
@@ -1442,7 +1442,7 @@ StrobeA_Row12:
         dw JCBB0
         dw JCBAE
         dw JCBAC
-        dw JCBAA
+        dw Strobe_SetBit4
 
 StrobeA_Row13:
 ; [C] set P1.5 (band row 13) in strobe table A for the dot's tick count
@@ -1493,7 +1493,7 @@ StrobeA_Row13:
         dw JCBF3
         dw JCBF1
         dw JCBEF
-        dw JCBED
+        dw Strobe_SetBit5
 
 StrobeA_Row14:
 ; [C] set P1.6 (band row 14) in strobe table A for the dot's tick count
@@ -1544,7 +1544,7 @@ StrobeA_Row14:
         dw JCC36
         dw JCC34
         dw JCC32
-        dw JCC30
+        dw Strobe_SetBit6
 
 StrobeA_Row15:
 ; [C] set P1.7 (band row 15) in strobe table A for the dot's tick count
@@ -1595,7 +1595,7 @@ StrobeA_Row15:
         dw JCC79
         dw JCC77
         dw JCC75
-        dw JCC73
+        dw Strobe_SetBit7
 
 StrobeB_Row00:
 ; [C] set P0.0 (band row 0) in strobe table B for the dot's tick count
@@ -1646,7 +1646,7 @@ StrobeB_Row00:
         dw JCAA4
         dw JCAA2
         dw JCAA0
-        dw JCA9E
+        dw Strobe_SetBit0
 
 StrobeB_Row01:
 ; [C] set P0.1 (band row 1) in strobe table B for the dot's tick count
@@ -1697,7 +1697,7 @@ StrobeB_Row01:
         dw JCAE7
         dw JCAE5
         dw JCAE3
-        dw JCAE1
+        dw Strobe_SetBit1
 
 StrobeB_Row02:
 ; [C] set P0.2 (band row 2) in strobe table B for the dot's tick count
@@ -1748,7 +1748,7 @@ StrobeB_Row02:
         dw JCB2A
         dw JCB28
         dw JCB26
-        dw JCB24
+        dw Strobe_SetBit2
 
 StrobeB_Row03:
 ; [C] set P0.3 (band row 3) in strobe table B for the dot's tick count
@@ -1799,7 +1799,7 @@ StrobeB_Row03:
         dw JCB6D
         dw JCB6B
         dw JCB69
-        dw JCB67
+        dw Strobe_SetBit3
 
 StrobeB_Row04:
 ; [C] set P0.4 (band row 4) in strobe table B for the dot's tick count
@@ -1850,7 +1850,7 @@ StrobeB_Row04:
         dw JCBB0
         dw JCBAE
         dw JCBAC
-        dw JCBAA
+        dw Strobe_SetBit4
 
 StrobeB_Row05:
 ; [C] set P0.5 (band row 5) in strobe table B for the dot's tick count
@@ -1901,7 +1901,7 @@ StrobeB_Row05:
         dw JCBF3
         dw JCBF1
         dw JCBEF
-        dw JCBED
+        dw Strobe_SetBit5
 
 StrobeB_Row06:
 ; [C] set P0.6 (band row 6) in strobe table B for the dot's tick count
@@ -1952,7 +1952,7 @@ StrobeB_Row06:
         dw JCC36
         dw JCC34
         dw JCC32
-        dw JCC30
+        dw Strobe_SetBit6
 
 StrobeB_Row07:
 ; [C] set P0.7 (band row 7) in strobe table B for the dot's tick count
@@ -2003,7 +2003,7 @@ StrobeB_Row07:
         dw JCC79
         dw JCC77
         dw JCC75
-        dw JCC73
+        dw Strobe_SetBit7
 
 StrobeB_Row08:
 ; [C] set P1.0 (band row 8) in strobe table B for the dot's tick count
@@ -2054,7 +2054,7 @@ StrobeB_Row08:
         dw JCAA4
         dw JCAA2
         dw JCAA0
-        dw JCA9E
+        dw Strobe_SetBit0
 
 StrobeB_Row09:
 ; [C] set P1.1 (band row 9) in strobe table B for the dot's tick count
@@ -2105,7 +2105,7 @@ StrobeB_Row09:
         dw JCAE7
         dw JCAE5
         dw JCAE3
-        dw JCAE1
+        dw Strobe_SetBit1
 
 StrobeB_Row10:
 ; [C] set P1.2 (band row 10) in strobe table B for the dot's tick count
@@ -2156,7 +2156,7 @@ StrobeB_Row10:
         dw JCB2A
         dw JCB28
         dw JCB26
-        dw JCB24
+        dw Strobe_SetBit2
 
 StrobeB_Row11:
 ; [C] set P1.3 (band row 11) in strobe table B for the dot's tick count
@@ -2207,7 +2207,7 @@ StrobeB_Row11:
         dw JCB6D
         dw JCB6B
         dw JCB69
-        dw JCB67
+        dw Strobe_SetBit3
 
 StrobeB_Row12:
 ; [C] set P1.4 (band row 12) in strobe table B for the dot's tick count
@@ -2258,7 +2258,7 @@ StrobeB_Row12:
         dw JCBB0
         dw JCBAE
         dw JCBAC
-        dw JCBAA
+        dw Strobe_SetBit4
 
 StrobeB_Row13:
 ; [C] set P1.5 (band row 13) in strobe table B for the dot's tick count
@@ -2309,7 +2309,7 @@ StrobeB_Row13:
         dw JCBF3
         dw JCBF1
         dw JCBEF
-        dw JCBED
+        dw Strobe_SetBit5
 
 StrobeB_Row14:
 ; [C] set P1.6 (band row 14) in strobe table B for the dot's tick count
@@ -2360,7 +2360,7 @@ StrobeB_Row14:
         dw JCC36
         dw JCC34
         dw JCC32
-        dw JCC30
+        dw Strobe_SetBit6
 
 StrobeB_Row15:
 ; [C] set P1.7 (band row 15) in strobe table B for the dot's tick count
@@ -2411,8 +2411,10 @@ StrobeB_Row15:
         dw JCC79
         dw JCC77
         dw JCC75
-        dw JCC73
-JCA9E:
+        dw Strobe_SetBit7
+
+Strobe_SetBit0:
+; [C] ladder of set (HL+).0: entered at the step for the tick count; turns bit 0 on in that many consecutive strobe-table bytes; ret
         set (HL+).0
 JCAA0:
         set (HL+).0
@@ -2480,7 +2482,9 @@ JCADE:
         set (HL+).0
 JCAE0:
         ret
-JCAE1:
+
+Strobe_SetBit1:
+; [C] ladder of set (HL+).1: entered at the step for the tick count; turns bit 1 on in that many consecutive strobe-table bytes; ret
         set (HL+).1
 JCAE3:
         set (HL+).1
@@ -2548,7 +2552,9 @@ JCB21:
         set (HL+).1
 JCB23:
         ret
-JCB24:
+
+Strobe_SetBit2:
+; [C] ladder of set (HL+).2: entered at the step for the tick count; turns bit 2 on in that many consecutive strobe-table bytes; ret
         set (HL+).2
 JCB26:
         set (HL+).2
@@ -2616,7 +2622,9 @@ JCB64:
         set (HL+).2
 JCB66:
         ret
-JCB67:
+
+Strobe_SetBit3:
+; [C] ladder of set (HL+).3: entered at the step for the tick count; turns bit 3 on in that many consecutive strobe-table bytes; ret
         set (HL+).3
 JCB69:
         set (HL+).3
@@ -2684,7 +2692,9 @@ JCBA7:
         set (HL+).3
 JCBA9:
         ret
-JCBAA:
+
+Strobe_SetBit4:
+; [C] ladder of set (HL+).4: entered at the step for the tick count; turns bit 4 on in that many consecutive strobe-table bytes; ret
         set (HL+).4
 JCBAC:
         set (HL+).4
@@ -2752,7 +2762,9 @@ JCBEA:
         set (HL+).4
 JCBEC:
         ret
-JCBED:
+
+Strobe_SetBit5:
+; [C] ladder of set (HL+).5: entered at the step for the tick count; turns bit 5 on in that many consecutive strobe-table bytes; ret
         set (HL+).5
 JCBEF:
         set (HL+).5
@@ -2820,7 +2832,9 @@ JCC2D:
         set (HL+).5
 JCC2F:
         ret
-JCC30:
+
+Strobe_SetBit6:
+; [C] ladder of set (HL+).6: entered at the step for the tick count; turns bit 6 on in that many consecutive strobe-table bytes; ret
         set (HL+).6
 JCC32:
         set (HL+).6
@@ -2888,7 +2902,9 @@ JCC70:
         set (HL+).6
 JCC72:
         ret
-JCC73:
+
+Strobe_SetBit7:
+; [C] ladder of set (HL+).7: entered at the step for the tick count; turns bit 7 on in that many consecutive strobe-table bytes; ret
         set (HL+).7
 JCC75:
         set (HL+).7
