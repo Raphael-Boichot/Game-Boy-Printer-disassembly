@@ -73,5 +73,6 @@ addr,size,name,tag,desc
 0419,2,HeatCurvePtr,C,tick curve of the current band (from Tab_TickCurvePtrsWarm / Cold)
 041B,1,BattAtStart,C,battery reading (no load) at job start; compared with the reading under load
 041C,1,ActivityTimer,C,reloaded with 0xF3 by every received byte; idle reset when it wraps
+041D,1,LowBatHoldTimer,I,loaded with 0x6D at boot and on entering idle; counts ticks while low battery is set and no job runs; at 0 clears LowBatHold
 041E,1,HeatSoak,C,bands printed since the head was last cold (max 40); indexes Tab_TickTrimBySoak
 0FF8,8,Sio2Buf,C,SIO2 data buffer (shared transmit / receive)

@@ -1,7 +1,8 @@
 """Trace the Game Boy Printer ROM (TMP87C840) from its interrupt vectors and write a listing.
 
 usage: python3 trace.py ROM.bin OUT.asm [extra_root_hex ...]
-The repository listing was made with:  python3 trace.py TMP87C840_Toshiba_printer_ROM.bin ../TMP87C840_printer_rom.asm ABA1
+The first, unnamed listing was made with:  python3 trace.py TMP87C840_Toshiba_printer_ROM.bin OUT.asm ABA1
+The repository listing is now built by tools/build_listing.py from symbols/.
 """
 import struct, sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -46,7 +46,7 @@ L803B:
         ld HL,RingBuf
         ld (RingWr),HL
         ld (RingRd),HL
-        ld HL,$041D
+        ld HL,LowBatHoldTimer
         ld (HL),$6D
         ld (IdleDelay),$9C
         ld (StartDelay),$01

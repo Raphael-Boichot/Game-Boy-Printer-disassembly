@@ -66,7 +66,7 @@ RxErrFlags       equ $00DA   ; [C] 1 byte(s). receiver error and control flags
 ;   .1 RxIgnored      [C] payload ignored (no command posted)
 ;   .2 ColdHead       [C] every row heat is zero: use the cold tick curves
 ;   .3 DecCompressed  [C] decoder: packet is compressed
-;   .4 SyncLostBusy   [C] sync lost while printing: treat packets as junk until the job ends
+;   .4 SyncLostBusy   [C] sync lost while busy: treat packets as junk until busy clears
 ;   .5 BreakBlock     [C] after Break: data packets give a packet error until Init
 ;   .7 DataAbort      [C] roll back the data packet
 CmdRequests      equ $00DB   ; [C] 1 byte(s). commands posted by the receiver to the main loop
@@ -92,7 +92,7 @@ JobFlags         equ $00E1   ; [C] 1 byte(s). print job flags
 ;   .3 BreakReq       [C] stop requested by Break
 ;   .4 SioRearm       [C] serial watchdog armed: re-arm SIO2 after SioIdleTimer if no packet is in progress
 ;   .5 BattCheckDue   [C] battery check under load (TC3) due
-;   .6 InitDeferred   [I] init received during button feed
+;   .6 InitDeferred   [I] Init accepted while a job other than the button feed was starting: run when the job ends
 ;   .7 BattSample     [C] first strobe burst of a job: read the battery under load (low battery at <= 0x7E, or a sag of 8 below BattAtStart when <= 0x9C)
 SlotBase         equ $00E2   ; [C] 2 byte(s). SRAM slot base (multiple of 0x280)
 SlotOffset       equ $00E4   ; [C] 2 byte(s). offset in the current 640-byte slot
@@ -135,5 +135,6 @@ EncoderIdleCount equ $0418   ; [C] 1 byte(s). encoder pulses while idle with no 
 HeatCurvePtr     equ $0419   ; [C] 2 byte(s). tick curve of the current band (from Tab_TickCurvePtrsWarm / Cold)
 BattAtStart      equ $041B   ; [C] 1 byte(s). battery reading (no load) at job start; compared with the reading under load
 ActivityTimer    equ $041C   ; [C] 1 byte(s). reloaded with 0xF3 by every received byte; idle reset when it wraps
+LowBatHoldTimer  equ $041D   ; [I] 1 byte(s). loaded with 0x6D at boot and on entering idle; counts ticks while low battery is set and no job runs; at 0 clears LowBatHold
 HeatSoak         equ $041E   ; [C] 1 byte(s). bands printed since the head was last cold (max 40); indexes Tab_TickTrimBySoak
 Sio2Buf          equ $0FF8   ; [C] 8 byte(s). SIO2 data buffer (shared transmit / receive)

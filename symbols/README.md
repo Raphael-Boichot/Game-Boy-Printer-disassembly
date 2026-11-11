@@ -18,7 +18,7 @@ The build stops on a duplicate name, a name that is not on an instruction or blo
 
 Board check: the owner's photos and the complete schematic and PCB of the IF-GBP-02 board ([RWeick/IF-GBP-02-Gameboy-Printer](https://github.com/RWeick/IF-GBP-02-Gameboy-Printer)) give every MCU pin's net; the pin descriptions in `sfr.csv` come from it. The firmware meaning of each signal is checked in the emulator. P5.3 is the only port bit whose effect is inferred: the firmware clears it on low battery (seen in the emulator) and after 27 encoder pulses while idle; on the schematic it drives the latch of the head supply, which also lights LED1.
 
-## Names not yet tagged C (11)
+## Names not yet tagged C (12)
 
 | Kind | Address | Name | Tag | Note |
 |---|---|---|---|---|
@@ -28,8 +28,9 @@ Board check: the owner's photos and the complete schematic and PCB of the IF-GBP
 | ROM | AAE6 | `Int_INT5_ButtonWake` | I | bare reti: the front button (P20 = INT5 pin) is enabled as an interrupt only to wake the CPU from IDLE |
 | ROM | B369 | `Mech_StateInvalid` | I | states 0x19-0x1E |
 | RAM | 00F7 | `IdleDelay` | I | tick counter before idle mode |
+| RAM | 041D | `LowBatHoldTimer` | I | loaded with 0x6D at boot and on entering idle; counts ticks while low battery is set and no job runs; at 0 clears LowBatHold |
 | bit | 0070.0 | `LineReady` | I | column data prepared |
 | bit | 0070.1 | `LineFetch` | I | line buffer refill pending |
 | bit | 00D9.1 | `LowBatHold` | I | withhold low battery from replies |
 | bit | 00E0.2 | `DecodeStarted` | I | decoder initialised for the packet |
-| bit | 00E1.6 | `InitDeferred` | I | init received during button feed |
+| bit | 00E1.6 | `InitDeferred` | I | Init accepted while a job other than the button feed was starting: run when the job ends |

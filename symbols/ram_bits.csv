@@ -37,7 +37,7 @@ addr,bit,name,tag,desc
 00DA,1,RxIgnored,C,payload ignored (no command posted)
 00DA,2,ColdHead,C,every row heat is zero: use the cold tick curves
 00DA,3,DecCompressed,C,decoder: packet is compressed
-00DA,4,SyncLostBusy,C,sync lost while printing: treat packets as junk until the job ends
+00DA,4,SyncLostBusy,C,sync lost while busy: treat packets as junk until busy clears
 00DA,5,BreakBlock,C,after Break: data packets give a packet error until Init
 00DA,7,DataAbort,C,roll back the data packet
 00DB,4,ReqStatus,C,status command posted
@@ -58,5 +58,5 @@ addr,bit,name,tag,desc
 00E1,3,BreakReq,C,stop requested by Break
 00E1,4,SioRearm,C,serial watchdog armed: re-arm SIO2 after SioIdleTimer if no packet is in progress
 00E1,5,BattCheckDue,C,battery check under load (TC3) due
-00E1,6,InitDeferred,I,init received during button feed
+00E1,6,InitDeferred,I,Init accepted while a job other than the button feed was starting: run when the job ends
 00E1,7,BattSample,C,"first strobe burst of a job: read the battery under load (low battery at <= 0x7E, or a sag of 8 below BattAtStart when <= 0x9C)"

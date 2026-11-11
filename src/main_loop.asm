@@ -79,7 +79,7 @@ Main_EnterIdle:
         ld (TC2CR),$04
         ldw (TREG2),$03D5
         ld (TC2CR),$24
-        ld HL,$041D
+        ld HL,LowBatHoldTimer
         ld (HL),$6D
         ld (IdleDelay),$9C
         clr (DecodeFlags).7   ; Tick
@@ -310,7 +310,7 @@ L82D6:
 ; Main_IdleResetTimer  [C]
 ;   Idle reset. While not printing, ActivityTimer (reloaded with 0xF3 by every
 ;   received byte) counts up once per tick; when it wraps (13 ticks, about
-;   125-133 ms of silence) the printer clears exactly what Init clears: image
+;   123-133 ms of silence) the printer clears exactly what Init clears: image
 ;   memory pointers, image-full, unprocessed (unless jammed), packet error,
 ;   break block, copies, decoder and ring buffer.
 ;==============================================================================
@@ -417,7 +417,7 @@ L838A:
 L8391:
         test (Status).0   ; StLowBattery
         jrs T,L839F
-        ld HL,$041D
+        ld HL,LowBatHoldTimer
         cmp (HL),$00
         jrs T,L839F
         inc (HL)

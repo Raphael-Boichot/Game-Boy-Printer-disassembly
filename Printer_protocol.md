@@ -25,7 +25,7 @@ This document derives the Game Boy Printer protocol from the printer's own firmw
 | Print preconditions | Print needs an empty data packet first and at least 4 argument bytes; otherwise packet error and nothing prints | B74F |
 | Palette 0x00 | means "no remapping", identical to 0xE4 | 8EC8 |
 | Inter-byte timeout | hardware timer TC4 restarted on every byte; if it expires mid-packet, the packet is aborted and its data rolled back | vector FFEA → B99E |
-| Idle reset | 12–13 main-loop ticks (≈125–133 ms at 8 MHz) with no byte while not printing clear memory and status, as an Init would | 82DC |
+| Idle reset | 12–13 main-loop ticks (≈123–133 ms at 8 MHz) with no byte while not printing clear memory and status, as an Init would | 82DC |
 | Inter-byte limit | 20 × 2048 / fc = 5.12 ms (8 MHz crystal) | TC4 |
 | Power-on lockout | until the mechanism has finished its start-up sequence, every packet is answered 0xFF | B399 |
 
@@ -97,7 +97,7 @@ The printer is the clocked side (the Game Boy drives the clock), and its serial 
   - clears `D9.7` ("packet in progress").
 
   With TC4CR = 0xD0 (clock fc/2¹¹) and the 8 MHz crystal this is 20 × 256 µs = **5.12 ms**; the emulator accepts a 5.1 ms gap and aborts above it.
-- **Activity counter:** every byte reloads the counter at 0x041C with 0xF3. The main loop increments it once per tick while the printer is **not** busy; when it wraps to 0 (13 ticks of silence; one tick = TREG2 10 × fc/2¹³ = 10.24 ms, so ≈125–133 ms) the receive state is reset (section 9). Every byte counts as activity, so a Game Boy that keeps polling status never triggers it.
+- **Activity counter:** every byte reloads the counter at 0x041C with 0xF3. The main loop increments it once per tick while the printer is **not** busy; when it wraps to 0 (13 ticks of silence; one tick = TREG2 10 × fc/2¹³ = 10.24 ms, so 123–133 ms after the last byte; 125–126 ms in the emulator) the receive state is reset (section 9). Every byte counts as activity, so a Game Boy that keeps polling status never triggers it.
 
 ---
 
@@ -127,7 +127,8 @@ Checksum rules:
 
 - Sum of bytes 2…5+n (command, compression, length low, length high, payload), each added as an unsigned byte to a 16-bit accumulator that wraps at 0x10000, compared against the value in bytes 6+n (low) and 7+n (high).
 - The sync bytes are not summed.
-- The checksum covers the header and payload even when the payload is discarded (busy, oversized, unknown command).
+- The checksum covers the header and payload even when the payload is discarded (oversized, unknown command, packet error).
+- Exception: a packet ignored while busy (data, Init or an unknown command while busy, Print while a print is running; B916). Its payload is not summed and its two checksum bytes are read without a compare, so it neither sets nor clears 0x01.
 - On a mismatch, `7C.7` (status 0x01) is set **after** the reply is prepared, so the Game Boy sees it in the **next** reply.
 - A bad checksum on any command other than 0x02 or 0x08 also clears "image data full" (0x04).
 - A bad checksum (or packet error) on a data packet rolls back the stored data (section 7). The rollback uses the current packet's result, not the lagged one.
@@ -136,11 +137,11 @@ Checksum rules:
 
 ## 5. Commands
 
-The receiver validates the command while the packet arrives, sends the reply, and only then posts a request to the main loop (flags `DB.7` init, `DB.6` print, `DB.5` break, `DB.4` status). A request is posted only if the checksum flag (as of the previous packet) is clear and the current packet raised no packet error. Every command except 0x0F starts by clearing the packet-error flag (`DA.0`).
+The receiver validates the command while the packet arrives, sends the reply, and only then posts a request to the main loop (flags `DB.7` init, `DB.6` print, `DB.5` break, `DB.4` status). A request is posted only if the current packet's checksum was good and it raised no packet error: `Rx_PostCommand` (B6C9) runs after the compare at B67C, so only the status byte of the reply lags by one packet. Every command except 0x0F starts by clearing the packet-error flag (`DA.0`).
 
 | Cmd | Name | Accepted when | Effect | Rejected when |
 |---|---|---|---|---|
-| 0x01 | Init | not printing | clears image memory and pointers, "image data full", "unprocessed data" (unless jammed), packet error, break flag, copy count | while printing: payload dropped, **"unprocessed data" (0x08) set** in that reply, no init |
+| 0x01 | Init | not busy (`Status.6`, B4F3) | clears image memory and pointers, "image data full", "unprocessed data" (unless jammed), packet error, break flag, copy count | while busy (printing or feeding): payload dropped, **"unprocessed data" (0x08) set** in that reply, no init |
 | 0x02 | Print | not printing, empty data packet already received, length ≥ 4 | main loop takes the 4 arguments (section 8) and starts; clears "unprocessed data" | no end-of-data packet, or length < 4 → packet error; while printing → ignored |
 | 0x04 | Data (len > 0) | not printing, no end-of-data yet, compression 0/1, length < 0x400, no break pending | payload streamed into image memory | after end-of-data, compression > 1, after a break → packet error; while printing → ignored |
 | 0x04 | Data (len = 0) | compression = 0, first one since init | sets "image data full" (0x04) = end of data; enables Print | a second empty packet, or compression ≠ 0 → packet error |
@@ -206,7 +207,7 @@ The serial interrupt only fills the 32-byte ring buffer. The main loop (A2ED–A
   - control byte `c` < 0x80 → copy the next `c + 1` bytes;
   - control byte `c` ≥ 0x80 → repeat the next byte `c − 0x7E` times (= (c & 0x7F) + 2).
 - **Compression quirks:**
-  - The run state is reset whenever a slot fills, so a run that crosses a 640-byte boundary is cut short.
+  - The run state is reset whenever a slot fills, so a run that crosses a 640-byte boundary is cut short: the rest of a repeat count is lost, and the remaining bytes of a literal run are then read as control bytes.
   - At the end of a compressed packet, the rest of the current slot is padded with 0x00 up to 640 bytes, so every compressed packet occupies whole slots.
   - The compression flag is sampled per packet.
 - **Rollback.** At the start of each data packet the pointers (0xE2, 0x85, 0xE4) are saved (to 0xEA/0xEC/0xEE). They are restored, discarding the packet, if:
@@ -252,10 +253,11 @@ The exposure byte sets how long the head's heating dots stay on while the paper 
 | Exposure | Offset |
 |---|---|
 | 0x00–0x06 | −16 |
-| … (steps of one every 7–8 values) | … |
-| 0x40 (default) | −7 |
-| 0x70–0x77 | 0 |
-| 0x78–0x7F | +1 |
+| … (one step every 7 values up to 0x37; 0x38–0x3B = −8; then one step every 8 values) | … |
+| 0x3C–0x43 (default 0x40) | −7 |
+| 0x6C–0x73 | −1 |
+| 0x74–0x7B | 0 |
+| 0x7C–0x7F | +1 |
 
 When the job starts (871D), the firmware reads the head temperature on ADC channel 0 and computes:
 
@@ -320,7 +322,7 @@ The tick length itself (`TREG1A`, µs) = `Tab_TickCurves*[BandIndex][step]` − 
 
 1. posts an **Init request if the printer is not printing** ("not printing" is defined below), so line noise while idle wipes the buffer. The main loop runs it at once (`Main_Commands`, 8564), even during a paper feed (code-read, not run in the emulator);
 2. replies **0xFF** to every following byte (the bad byte itself was already answered 0x00, since a reply is loaded one byte ahead);
-3. if printing, sets `DA.4`, so every later packet until the job ends is also treated as garbage;
+3. if busy (`Status.6`, B3CB: printing or feeding), sets `DA.4`, so every later packet until busy clears is also treated as garbage;
 4. stays in this loop until the TC4 inter-byte timeout fires (a gap on the line).
 
 A bad second byte takes the same path (B3B3: `jrs T` after a `jr` is always taken, because every jump sets JF), so it also wipes a job loaded while idle. In the emulator, Init, data, the empty data packet, then `88 00`, a gap, and Print: the Print reply is 0x10 and nothing prints.
@@ -346,7 +348,7 @@ This is effectively an Init: `Cmd_Init` (857B) clears exactly the same state. So
 
 Every received byte reloads the timer, so a Game Boy that keeps polling with status packets (0x0F) keeps a loaded job alive indefinitely.
 
-**"Not printing" and the two idle states.** The receiver's test for "not printing" (sync loss B3BF, Init B4E3, Print B749) is the flag `JobFlags.Printing` (0xE1 bit 1). `Job_StartPrint` sets it (8739) once the temperature check has passed, about 26 ms after the Print command; it is cleared (862F) when the mechanism is back at rest and no copies are left, so it covers the margins and every copy. A feed-only job (0 copies) and the front-button feed set `Feeding` instead, so for these tests they count as "not printing" although the printer is busy. Seen from the link there are two idle states:
+**"Not printing" and the two idle states.** The receiver's test for "not printing" (sync loss B3BF, status poll B4E3, Print B749) is the flag `JobFlags.Printing` (0xE1 bit 1). `Job_StartPrint` sets it (8739) once the temperature check has passed, about 26 ms after the Print command; it is cleared (862F) when the mechanism is back at rest and no copies are left, so it covers the margins and every copy. A feed-only job (0 copies) and the front-button feed set `Feeding` instead, so for these tests they count as "not printing" although the printer is busy. Init is different: it tests the busy bit (`Status.6`, B4F3), so it is refused, with 0x08 set, during any job, feeds included. Seen from the link there are two idle states:
 
 | | Cold boot idle | Print-finished idle |
 |---|---|---|
@@ -360,7 +362,7 @@ Init, a bad sync byte and the silence reset clear the same pointers and flags (`
 
 **Is Init needed?** No, for a sender that starts from a clean state. Init only resets pointers and flags, and two other mechanisms do the same:
 - after a finished print, the next data packet starts a new image by itself (`AfterPrint`);
-- after 125–133 ms of silence, the idle reset clears the same state as Init.
+- after 123–133 ms of silence, the idle reset clears the same state as Init.
 
 Init (or a pause of more than about 130 ms) is needed only when a new job follows one that did not finish cleanly. All cases run in the emulator:
 
@@ -455,7 +457,7 @@ The signals themselves are confirmed by the schematic: INT3 = encoder from CN1 p
 
 - `src/` + `Makefile`: the editable source tree; `make check` rebuilds the ROM (md5 checked). `tools/make_source.py` writes it from the listing.
 - `tools/build_listing.py`: builds `TMP87C840_printer_rom.asm` from the symbol files in `symbols/` (names, RAM, flag bits, registers, data types), with checks, and reassembles the listing text with `tools/t870asm.py`; the result must give the ROM md5 again (`symbols/README.md`).
-- `tools/t870.py`: a TLCS-870 disassembler written for this work, based on MAME's `tlcs870d.cpp` opcode map. Note: `T`/`F` jump conditions test the CPU's JF flag; they are not always/never. After `test`, `jr T` is taken when the bit is **0**.
+- `tools/t870.py`: a TLCS-870 disassembler written for this work, based on MAME's `tlcs870d.cpp` opcode map. Note: `T`/`F` jump conditions test the CPU's JF flag; they are not always/never. After `test`, `jr T` is taken when the bit is **0**. `test` is Toshiba's alias of `LD CF,src.b`: it also loads the bit into CF, which the code uses to copy bits (`test (DE).A` then `ld (HL).0,CF`).
 - `tools/trace.py`: the first plain tracer, kept for reference (unnamed listing). The tracing rules live on in `tools/build_listing.py`: recursive descent from the 16 interrupt vectors, following calls, branches and the 33 `jp (PC+A)` jump tables (one 31-entry mechanism state table at 0xAB65, and 32 tables at 0xBED7–0xCA58 in the strobe-table writers). About 16 KB of the 24.7 KB used ROM is code; the rest is tables and the self-test image.
 - `TMP87C840_printer_rom.asm`: the annotated listing generated from `symbols/` (named routines, states, tables, RAM, flag bits and registers, each tagged; 898 short branch targets keep automatic `Lxxxx` / `Jxxxx` labels).
 - `tools/check_repo_consistency.py`: checks every number quoted in the docs, that the generated files are fresh, the links, and the builds (`--slow` also re-runs the emulator checks).
@@ -468,7 +470,7 @@ Key routines for anyone continuing: `Int_SIO2_Receiver` (B373) · `Rx_WaitByte` 
 
 ## 14. Verification by running the firmware
 
-`emulator/gbprinter_emu.py` runs this ROM on an emulated TMP87C840 (8 MHz) and drives the link like a Game Boy (`emulator/README.md` lists what is modelled and what is guessed). `emulator/claims.py` replays the cases below; all 27 checks give the result shown. Statuses are the bytes the Game Boy reads after `0x81`.
+`emulator/gbprinter_emu.py` runs this ROM on an emulated TMP87C840 (8 MHz) and drives the link like a Game Boy (`emulator/README.md` lists what is modelled and what is guessed). `emulator/claims.py` replays most of the cases below; all 27 checks give the result shown (`emulator/claims_output.txt`), and the strobe row comes from `emulator/strobe_check.py`. The rows on the ADC thresholds, a battery drop during a print, the front button, copies, margins, band length and the end of a job were run by hand in the emulator and have no committed script. Statuses are the bytes the Game Boy reads after `0x81`.
 
 | Case | Observed |
 |---|---|
@@ -483,7 +485,7 @@ Key routines for anyone continuing: `Int_SIO2_Receiver` (B373) · `Rx_WaitByte` 
 | One junk byte while idle, then data | 00 (the data had been wiped by an Init); without the junk byte: 08 |
 | Bytes after a junk first byte, no gap | all FF; after a gap > 5.12 ms the next packet is answered normally |
 | 0x88 then a bad second byte | 00 FF FF; a job loaded while idle is wiped (Print then answered 0x10) |
-| Two jobs with no Init and no pause | both print (480 motor pulses and 1,280 bytes each) |
+| Two jobs with no Init and no pause | both print (500 motor pulses and 1,280 bytes each) |
 | Data without Print, then a job at once | 2,560 bytes printed (old data first) |
 | End-of-data without Print, then data at once | 18 (packet error) |
 | Longest gap inside a packet that is still accepted | 3.92 ms + 1.2 ms byte time = 5.12 ms |

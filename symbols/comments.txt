@@ -58,7 +58,7 @@ receiver (Main_Commands), the job control and the print pipeline.
 @ 82DC
 Idle reset. While not printing, ActivityTimer (reloaded with 0xF3 by every
 received byte) counts up once per tick; when it wraps (13 ticks, about
-125-133 ms of silence) the printer clears exactly what Init clears: image
+123-133 ms of silence) the printer clears exactly what Init clears: image
 memory pointers, image-full, unprocessed (unless jammed), packet error,
 break block, copies, decoder and ring buffer.
 
