@@ -18,6 +18,12 @@ Holding the front button while switching on (port P2.0 read low twice at boot) m
 
 ![Game Boy Printer self-test banner](printer_test_image.png)
 
+## ROM layout
+
+The whole ROM drawn as Game Boy 2bpp tiles (16 bytes per tile, 32 tiles = 0x200 bytes per row), each pixel row tinted by what its bytes are: code, `jp (PC+A)` jump tables, byte and word tables, the self-test graphics, the interrupt vectors and the unused 0xFF fill. Tiles are counted from 0x8000, so the self-test band, which starts at 0xDDEE, appears shifted down by 7 pixel rows. Regenerate with `python3 tools/rom_map.py`.
+
+![ROM layout map as Game Boy tiles](rom_layout_map.png)
+
 ## Contents
 
 | File | What it is |
@@ -33,9 +39,11 @@ Holding the front button while switching on (port P2.0 read low twice at boot) m
 | [`tools/t870asm.py`](tools/t870asm.py) | TLCS-870 assembler (source tree and listing): `python3 tools/t870asm.py src/main.asm out.bin` |
 | [`tools/make_source.py`](tools/make_source.py) | Writes `src/` from the annotated listing |
 | [`tools/trace.py`](tools/trace.py) | The first plain tracer (unnamed listing), kept for reference |
+| [`tools/rom_map.py`](tools/rom_map.py) | Draws `rom_layout_map.png` from the ROM, the listing and `symbols/` |
 | [`tools/check_repo_consistency.py`](tools/check_repo_consistency.py) | Consistency check: quoted numbers, fresh generated files, links, builds (`--slow` re-runs the emulator checks) |
 | [`emulator/`](emulator/) | Emulator that runs this ROM on an emulated TMP87C840 and talks to it like a Game Boy; `claims.py` checks the protocol reference against the firmware (27 checks, all matching) |
 | [`printer_test_image.png`](printer_test_image.png) | The built-in self-test image (ROM 0xDDEE-0xE06D, 160 x 16 px), drawn 4x |
+| [`rom_layout_map.png`](rom_layout_map.png) | ROM layout map: the 32 KB ROM as Game Boy tiles, tinted by code, jump tables, tables, graphics, vectors and fill |
 
 All of this is AI work, from reading the code, running it in the emulator, the board schematic and real strobe measurements; the remaining points to check on real hardware are in `Printer_protocol.md` section 12.
 
